@@ -1,0 +1,6 @@
+{
+  "name": "Danlog Elementary School",
+  "description": "Danlog Elementary School (District of Pilar II, Est. 1975) — official school portal featuring Kindergarten to Grade 6 enrollment, faculty records, activity galleries, school calendar, and Teacher, Principal, and AO-II portals.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
