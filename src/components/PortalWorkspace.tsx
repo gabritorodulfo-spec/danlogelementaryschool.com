@@ -5,6 +5,8 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Copy,
+  Database,
   Download,
   Eye,
   EyeOff,
@@ -17,6 +19,7 @@ import {
   Pencil,
   Plus,
   Printer,
+  RefreshCw,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -38,9 +41,12 @@ import {
 import {
   AdminAuditEntry,
   AdmissionsSubmission,
+  DatabaseOverview,
+  DatabaseRecordCollection,
   InventoryItem,
   InventoryStatus,
   PrincipalDocumentStatus,
+  SchoolSystemBootstrap,
   SiteBackendConfig,
   SiteFrontendConfig,
   StaffAccountSummary,
@@ -51,7 +57,15 @@ import {
 export type RoleWorkspace = 'teacher' | 'principal' | 'ao2';
 type TeacherTab = 'submitted' | 'upload' | 'roster' | 'schedule' | 'security';
 type PrincipalTab = 'documents' | 'security';
-type Ao2Tab = 'dashboard' | 'endorsed' | 'frontend' | 'backend' | 'accounts' | 'admissions' | 'audit';
+type Ao2Tab =
+  | 'dashboard'
+  | 'endorsed'
+  | 'frontend'
+  | 'backend'
+  | 'accounts'
+  | 'admissions'
+  | 'audit'
+  | 'database';
 
 export interface TeacherAuthSession {
   teacherId: string;
@@ -145,6 +159,23 @@ interface PortalWorkspaceProps {
     patch: Partial<Omit<InventoryItem, 'id'>>
   ) => Promise<{ ok: boolean; error?: string }>;
   onAo2DeleteInventoryItem: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  onAo2FetchDatabase: () => Promise<{ ok: boolean; overview?: DatabaseOverview; error?: string }>;
+  onAo2UpdateDbEnrollmentRow: (payload: {
+    year: AcademicYear;
+    gradeId: string;
+    enrolledStudents: number;
+    capacity: number;
+    teachers: number;
+    sections: number;
+    facultyLead: string;
+  }) => Promise<{ ok: boolean; overview?: DatabaseOverview; error?: string }>;
+  onAo2DeleteDbRecord: (
+    collection: DatabaseRecordCollection,
+    id: string
+  ) => Promise<{ ok: boolean; overview?: DatabaseOverview; error?: string }>;
+  onAo2RestoreDatabase: (
+    payload: Partial<SchoolSystemBootstrap>
+  ) => Promise<{ ok: boolean; overview?: DatabaseOverview; error?: string }>;
   onResetSystemDefaults: () => Promise<void>;
 }
 
@@ -217,6 +248,10 @@ export function PortalWorkspace({
   onAo2AddInventoryItem,
   onAo2UpdateInventoryItem,
   onAo2DeleteInventoryItem,
+  onAo2FetchDatabase,
+  onAo2UpdateDbEnrollmentRow,
+  onAo2DeleteDbRecord,
+  onAo2RestoreDatabase,
   onResetSystemDefaults,
 }: PortalWorkspaceProps) {
   const [roleWorkspace, setRoleWorkspace] = useState<RoleWorkspace>(initialRole);
@@ -344,6 +379,55 @@ export function PortalWorkspace({
     issuedToUser: '',
     dateIssued: '',
   });
+
+  // AO-II Database Manager state
+  const [dbOverview, setDbOverview] = useState<DatabaseOverview | null>(null);
+  const [dbLoading, setDbLoading] = useState(false);
+  const [dbCollection, setDbCollection] = useState<
+    | 'enrollment'
+    | 'inventoryItems'
+    | 'uploadedDocuments'
+    | 'admissionsSubmissions'
+    | 'accounts'
+    | 'auditLog'
+    | 'json'
+  >('enrollment');
+  const [dbYearFilter, setDbYearFilter] = useState<AcademicYear>(backendConfig.activeAcademicYear);
+  const [dbSearch, setDbSearch] = useState('');
+  const [dbEditingGradeKey, setDbEditingGradeKey] = useState<string | null>(null);
+  const [dbGradeDraft, setDbGradeDraft] = useState({
+    enrolledStudents: '0',
+    capacity: '0',
+    teachers: '1',
+    sections: '1',
+    facultyLead: '',
+  });
+  const [dbConfirmDeleteKey, setDbConfirmDeleteKey] = useState<string | null>(null);
+  const [dbJsonDraft, setDbJsonDraft] = useState('');
+  const [dbCopied, setDbCopied] = useState(false);
+  const [dbBusyKey, setDbBusyKey] = useState<string | null>(null);
+
+  const loadAo2Database = async (syncJsonEditor = false) => {
+    setDbLoading(true);
+    setAo2ErrorMessage('');
+    const result = await onAo2FetchDatabase();
+    setDbLoading(false);
+    if (!result.ok || !result.overview) {
+      setAo2ErrorMessage(result.error || 'Could not load database store.');
+      return;
+    }
+    setDbOverview(result.overview);
+    if (syncJsonEditor || !dbJsonDraft.trim()) {
+      setDbJsonDraft(JSON.stringify(result.overview.data, null, 2));
+    }
+  };
+
+  useEffect(() => {
+    if (ao2Session && ao2Tab === 'database') {
+      void loadAo2Database(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ao2Session?.token, ao2Tab]);
 
   useEffect(() => {
     setFrontendDraft(frontendConfig);
@@ -3384,6 +3468,7 @@ export function PortalWorkspace({
                       label: `Parent Inquiries (${admissionsSubmissions.length})`,
                     },
                     { id: 'audit' as Ao2Tab, label: `System Audit Log (${auditLog.length})` },
+                    { id: 'database' as Ao2Tab, label: 'Database' },
                   ].map((tab) => {
                     const active = ao2Tab === tab.id;
                     return (
@@ -5239,6 +5324,1079 @@ export function PortalWorkspace({
                           </span>
                         </div>
                       ))}
+                    </div>
+                  )}
+
+                  {/* AO-II TAB 6: SCHOOL DATABASE MANAGER */}
+                  {ao2Tab === 'database' && (
+                    <div className="space-y-4">
+                      {/* Connection & Store Metadata Bar */}
+                      <div className="bg-gradient-to-r from-[#0B291E] via-[#0E3A2B] to-[#123344] text-white rounded-xl border border-[#1E4D3B] p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-xs">
+                        <div className="space-y-1.5">
+                          <div className="inline-flex items-center gap-2 text-xs font-semibold text-[#A7F3D0]">
+                            <Database className="w-4 h-4" />
+                            <span>AO-II Direct School Database Access</span>
+                          </div>
+                          <h4 className="font-display text-lg font-semibold text-white">
+                            {dbOverview?.engine ?? 'Express JSON Persistent Store'}
+                          </h4>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#D1E7DB]">
+                            <span>
+                              Store:{' '}
+                              <code className="font-mono text-[#A7F3D0]">
+                                {dbOverview?.storePath ?? '.data/school_state.json'}
+                              </code>
+                            </span>
+                            <span className="font-mono tabular-nums">
+                              Size: {formatFileSize(dbOverview?.fileSizeBytes ?? 0)}
+                            </span>
+                            <span>
+                              Last Saved: {dbOverview?.lastModifiedAt ?? 'Synchronizing...'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <button
+                            type="button"
+                            disabled={dbLoading}
+                            onClick={() => void loadAo2Database(true)}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/25 transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${dbLoading ? 'animate-spin' : ''}`} />
+                            <span>{dbLoading ? 'Refreshing...' : 'Refresh Store'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!ao2Session) return;
+                              const res = await fetch('/api/admin/export', {
+                                headers: {
+                                  'x-admin-role': 'AO-II',
+                                  'x-ao2-token': ao2Session.token,
+                                },
+                              });
+                              if (!res.ok) {
+                                setAo2ErrorMessage('Could not export database JSON.');
+                                return;
+                              }
+                              const blob = await res.blob();
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = 'danlog_elementary_backup.json';
+                              document.body.appendChild(a);
+                              a.click();
+                              a.remove();
+                              URL.revokeObjectURL(url);
+                              setAo2SaveMessage('Exported danlog_elementary_backup.json from database.');
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-[#10B981] hover:bg-[#059669] text-[#052E16] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>Export JSON Backup</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Collection Selector Grid */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
+                        {[
+                          {
+                            id: 'enrollment' as const,
+                            label: 'Enrollment Rows',
+                            count:
+                              dbOverview?.counts.enrollmentRows ??
+                              (enrollmentByYear['2026-2027']?.length ?? 0) +
+                                (enrollmentByYear['2025-2026']?.length ?? 0),
+                          },
+                          {
+                            id: 'inventoryItems' as const,
+                            label: 'Inventory',
+                            count: dbOverview?.counts.inventoryItems ?? inventoryItems.length,
+                          },
+                          {
+                            id: 'uploadedDocuments' as const,
+                            label: 'Documents',
+                            count: dbOverview?.counts.uploadedDocuments ?? uploadedDocuments.length,
+                          },
+                          {
+                            id: 'admissionsSubmissions' as const,
+                            label: 'Inquiries',
+                            count:
+                              dbOverview?.counts.admissionsSubmissions ?? admissionsSubmissions.length,
+                          },
+                          {
+                            id: 'accounts' as const,
+                            label: 'Accounts',
+                            count: dbOverview?.counts.staffAccounts ?? teacherAccounts.length + 2,
+                          },
+                          {
+                            id: 'auditLog' as const,
+                            label: 'Audit Log',
+                            count: dbOverview?.counts.auditLog ?? auditLog.length,
+                          },
+                          {
+                            id: 'json' as const,
+                            label: 'JSON / Restore',
+                            count: null,
+                          },
+                        ].map((col) => {
+                          const active = dbCollection === col.id;
+                          return (
+                            <button
+                              key={col.id}
+                              type="button"
+                              onClick={() => {
+                                setDbCollection(col.id);
+                                setDbConfirmDeleteKey(null);
+                                setDbEditingGradeKey(null);
+                              }}
+                              className={`text-left p-3 rounded-xl border transition-all cursor-pointer ${
+                                active
+                                  ? 'bg-[#ECFDF5] border-[#047857] shadow-xs'
+                                  : 'bg-white border-[#E2E5E9] hover:border-[#A7F3D0]'
+                              }`}
+                            >
+                              <div
+                                className={`text-[11px] font-semibold truncate ${
+                                  active ? 'text-[#047857]' : 'text-[#525866]'
+                                }`}
+                              >
+                                {col.label}
+                              </div>
+                              <div className="font-display text-lg font-semibold text-[#111315] tabular-nums mt-0.5">
+                                {col.count === null ? 'RAW' : col.count}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Filter Toolbar */}
+                      {dbCollection !== 'json' && dbCollection !== 'accounts' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] p-3.5 flex flex-wrap items-center justify-between gap-3">
+                          <div className="relative flex-1 min-w-[220px]">
+                            <Search className="w-4 h-4 text-[#525866] absolute left-3 top-1/2 -translate-y-1/2" />
+                            <input
+                              type="text"
+                              value={dbSearch}
+                              onChange={(e) => setDbSearch(e.target.value)}
+                              placeholder="Filter database records by ID, title, name, or status..."
+                              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA] text-[#111315]"
+                            />
+                          </div>
+                          {dbCollection === 'enrollment' && (
+                            <div className="inline-flex rounded-lg border border-[#DCE0E6] bg-[#F8F9FA] p-0.5">
+                              {(['2026-2027', '2025-2026'] as AcademicYear[]).map((yr) => (
+                                <button
+                                  key={yr}
+                                  type="button"
+                                  onClick={() => {
+                                    setDbYearFilter(yr);
+                                    setDbEditingGradeKey(null);
+                                  }}
+                                  className={`px-3 py-1.5 text-xs font-semibold rounded-md cursor-pointer whitespace-nowrap shrink-0 ${
+                                    dbYearFilter === yr
+                                      ? 'bg-[#0B291E] text-white'
+                                      : 'text-[#525866] hover:text-[#111315]'
+                                  }`}
+                                >
+                                  SY {yr}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Collection 1: Enrollment Rows */}
+                      {dbCollection === 'enrollment' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">ID / Grade</th>
+                                  <th className="py-3 px-4 font-semibold">Division</th>
+                                  <th className="py-3 px-4 font-semibold">Enrolled</th>
+                                  <th className="py-3 px-4 font-semibold">Capacity</th>
+                                  <th className="py-3 px-4 font-semibold">Teachers</th>
+                                  <th className="py-3 px-4 font-semibold">Sections</th>
+                                  <th className="py-3 px-4 font-semibold">Faculty Lead</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(
+                                  (dbOverview?.data.enrollmentByYear ?? enrollmentByYear)[
+                                    dbYearFilter
+                                  ] ?? []
+                                )
+                                  .filter((row) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      row.gradeLabel.toLowerCase().includes(q) ||
+                                      row.id.toLowerCase().includes(q) ||
+                                      row.division.toLowerCase().includes(q) ||
+                                      row.facultyLead.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((row) => {
+                                    const rowKey = `${dbYearFilter}::${row.id}`;
+                                    const isEditing = dbEditingGradeKey === rowKey;
+                                    const isBusy = dbBusyKey === rowKey;
+                                    return (
+                                      <tr key={row.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4">
+                                          <div className="font-semibold text-[#111315]">
+                                            {row.gradeLabel}
+                                          </div>
+                                          <div className="font-mono text-[11px] text-[#525866]">
+                                            {row.id}
+                                          </div>
+                                        </td>
+                                        <td className="py-3 px-4 text-[#525866]">{row.division}</td>
+                                        <td className="py-3 px-4 font-mono tabular-nums">
+                                          {isEditing ? (
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              max={250}
+                                              value={dbGradeDraft.enrolledStudents}
+                                              onChange={(e) =>
+                                                setDbGradeDraft((prev) => ({
+                                                  ...prev,
+                                                  enrolledStudents: e.target.value,
+                                                }))
+                                              }
+                                              className="w-20 px-2 py-1 rounded border border-[#CBD5E1] bg-white text-xs"
+                                            />
+                                          ) : (
+                                            row.enrolledStudents
+                                          )}
+                                        </td>
+                                        <td className="py-3 px-4 font-mono tabular-nums">
+                                          {isEditing ? (
+                                            <input
+                                              type="number"
+                                              min={10}
+                                              max={200}
+                                              value={dbGradeDraft.capacity}
+                                              onChange={(e) =>
+                                                setDbGradeDraft((prev) => ({
+                                                  ...prev,
+                                                  capacity: e.target.value,
+                                                }))
+                                              }
+                                              className="w-20 px-2 py-1 rounded border border-[#CBD5E1] bg-white text-xs"
+                                            />
+                                          ) : (
+                                            row.capacity
+                                          )}
+                                        </td>
+                                        <td className="py-3 px-4 font-mono tabular-nums">
+                                          {isEditing ? (
+                                            <input
+                                              type="number"
+                                              min={1}
+                                              max={35}
+                                              value={dbGradeDraft.teachers}
+                                              onChange={(e) =>
+                                                setDbGradeDraft((prev) => ({
+                                                  ...prev,
+                                                  teachers: e.target.value,
+                                                }))
+                                              }
+                                              className="w-16 px-2 py-1 rounded border border-[#CBD5E1] bg-white text-xs"
+                                            />
+                                          ) : (
+                                            row.teachers
+                                          )}
+                                        </td>
+                                        <td className="py-3 px-4 font-mono tabular-nums">
+                                          {isEditing ? (
+                                            <input
+                                              type="number"
+                                              min={1}
+                                              max={20}
+                                              value={dbGradeDraft.sections}
+                                              onChange={(e) =>
+                                                setDbGradeDraft((prev) => ({
+                                                  ...prev,
+                                                  sections: e.target.value,
+                                                }))
+                                              }
+                                              className="w-16 px-2 py-1 rounded border border-[#CBD5E1] bg-white text-xs"
+                                            />
+                                          ) : (
+                                            row.sections
+                                          )}
+                                        </td>
+                                        <td className="py-3 px-4 text-[#111315]">
+                                          {isEditing ? (
+                                            <input
+                                              type="text"
+                                              value={dbGradeDraft.facultyLead}
+                                              onChange={(e) =>
+                                                setDbGradeDraft((prev) => ({
+                                                  ...prev,
+                                                  facultyLead: e.target.value,
+                                                }))
+                                              }
+                                              className="w-40 px-2 py-1 rounded border border-[#CBD5E1] bg-white text-xs"
+                                            />
+                                          ) : (
+                                            row.facultyLead
+                                          )}
+                                        </td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {isEditing ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                disabled={isBusy}
+                                                onClick={async () => {
+                                                  setDbBusyKey(rowKey);
+                                                  setAo2ErrorMessage('');
+                                                  setAo2SaveMessage('');
+                                                  const res = await onAo2UpdateDbEnrollmentRow({
+                                                    year: dbYearFilter,
+                                                    gradeId: row.id,
+                                                    enrolledStudents:
+                                                      Number(dbGradeDraft.enrolledStudents) || 0,
+                                                    capacity: Number(dbGradeDraft.capacity) || row.capacity,
+                                                    teachers: Number(dbGradeDraft.teachers) || 1,
+                                                    sections: Number(dbGradeDraft.sections) || 1,
+                                                    facultyLead: dbGradeDraft.facultyLead,
+                                                  });
+                                                  setDbBusyKey(null);
+                                                  if (!res.ok) {
+                                                    setAo2ErrorMessage(
+                                                      res.error || 'Could not save enrollment row.'
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                  setDbEditingGradeKey(null);
+                                                  setAo2SaveMessage(
+                                                    `Updated database record ${row.gradeLabel} (SY ${dbYearFilter}).`
+                                                  );
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#047857] text-white hover:bg-[#065F46] cursor-pointer"
+                                              >
+                                                Save
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbEditingGradeKey(null)}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#DCE0E6] text-[#525866] hover:text-[#111315] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setDbEditingGradeKey(rowKey);
+                                                setDbGradeDraft({
+                                                  enrolledStudents: String(row.enrolledStudents),
+                                                  capacity: String(row.capacity),
+                                                  teachers: String(row.teachers),
+                                                  sections: String(row.sections),
+                                                  facultyLead: row.facultyLead,
+                                                });
+                                              }}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#DCE0E6] text-[#111315] hover:bg-[#F1F5F9] cursor-pointer"
+                                            >
+                                              <Pencil className="w-3 h-3" />
+                                              <span>Edit Row</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 2: School Inventory */}
+                      {dbCollection === 'inventoryItems' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Record ID</th>
+                                  <th className="py-3 px-4 font-semibold">Item Name</th>
+                                  <th className="py-3 px-4 font-semibold">Qty</th>
+                                  <th className="py-3 px-4 font-semibold">Status</th>
+                                  <th className="py-3 px-4 font-semibold">Issued To</th>
+                                  <th className="py-3 px-4 font-semibold">Received / Issued</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.inventoryItems ?? inventoryItems)
+                                  .filter((item) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      item.id.toLowerCase().includes(q) ||
+                                      item.itemName.toLowerCase().includes(q) ||
+                                      item.status.toLowerCase().includes(q) ||
+                                      item.issuedToUser.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((item) => {
+                                    const delKey = `inventoryItems::${item.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    return (
+                                      <tr key={item.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {item.id}
+                                        </td>
+                                        <td className="py-3 px-4 font-semibold text-[#111315]">
+                                          {item.itemName}
+                                        </td>
+                                        <td className="py-3 px-4 font-mono tabular-nums">
+                                          {item.quantity}
+                                        </td>
+                                        <td className="py-3 px-4">{item.status}</td>
+                                        <td className="py-3 px-4 text-[#525866]">
+                                          {item.issuedToUser || '—'}
+                                        </td>
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {item.dateReceived || '—'} / {item.dateIssued || '—'}
+                                        </td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                disabled={dbBusyKey === delKey}
+                                                onClick={async () => {
+                                                  setDbBusyKey(delKey);
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'inventoryItems',
+                                                    item.id
+                                                  );
+                                                  setDbBusyKey(null);
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (!res.ok) {
+                                                    setAo2ErrorMessage(
+                                                      res.error || 'Could not delete record.'
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                  setAo2SaveMessage(
+                                                    `Deleted inventory record ${item.id} from database.`
+                                                  );
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white hover:bg-[#991B1B] cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] font-semibold border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 3: Uploaded Documents */}
+                      {dbCollection === 'uploadedDocuments' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Record ID</th>
+                                  <th className="py-3 px-4 font-semibold">Title &amp; Course</th>
+                                  <th className="py-3 px-4 font-semibold">Teacher</th>
+                                  <th className="py-3 px-4 font-semibold">File</th>
+                                  <th className="py-3 px-4 font-semibold">Principal Status</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.uploadedDocuments ?? uploadedDocuments)
+                                  .filter((doc) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      doc.id.toLowerCase().includes(q) ||
+                                      doc.title.toLowerCase().includes(q) ||
+                                      doc.fileName.toLowerCase().includes(q) ||
+                                      doc.principalReviewStatus.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((doc) => {
+                                    const delKey = `uploadedDocuments::${doc.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    const teacherName =
+                                      TEACHER_PORTAL_PROFILES.find((t) => t.id === doc.teacherId)
+                                        ?.name ?? doc.teacherId;
+                                    return (
+                                      <tr key={doc.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {doc.id}
+                                        </td>
+                                        <td className="py-3 px-4">
+                                          <div className="font-semibold text-[#111315]">
+                                            {doc.title}
+                                          </div>
+                                          <div className="text-[11px] text-[#525866]">
+                                            {doc.category} · {doc.targetCourse}
+                                          </div>
+                                        </td>
+                                        <td className="py-3 px-4 text-[#525866]">{teacherName}</td>
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {doc.fileName} ({doc.fileSizeLabel})
+                                        </td>
+                                        <td className="py-3 px-4">
+                                          {doc.principalReviewStatus === 'Endorsed/Principal'
+                                            ? 'Approved'
+                                            : doc.principalReviewStatus}
+                                        </td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                disabled={dbBusyKey === delKey}
+                                                onClick={async () => {
+                                                  setDbBusyKey(delKey);
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'uploadedDocuments',
+                                                    doc.id
+                                                  );
+                                                  setDbBusyKey(null);
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (!res.ok) {
+                                                    setAo2ErrorMessage(
+                                                      res.error || 'Could not delete document.'
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                  setAo2SaveMessage(
+                                                    `Deleted document record ${doc.id} from database.`
+                                                  );
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white hover:bg-[#991B1B] cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] font-semibold border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 4: Parent Inquiries */}
+                      {dbCollection === 'admissionsSubmissions' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Ref / ID</th>
+                                  <th className="py-3 px-4 font-semibold">Parent / Guardian</th>
+                                  <th className="py-3 px-4 font-semibold">Grade &amp; Year</th>
+                                  <th className="py-3 px-4 font-semibold">Status</th>
+                                  <th className="py-3 px-4 font-semibold">Submitted At</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.admissionsSubmissions ?? admissionsSubmissions)
+                                  .filter((item) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      item.id.toLowerCase().includes(q) ||
+                                      item.referenceCode.toLowerCase().includes(q) ||
+                                      item.parentName.toLowerCase().includes(q) ||
+                                      item.email.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((item) => {
+                                    const delKey = `admissionsSubmissions::${item.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    return (
+                                      <tr key={item.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          <div>{item.referenceCode}</div>
+                                          <div>{item.id}</div>
+                                        </td>
+                                        <td className="py-3 px-4">
+                                          <div className="font-semibold text-[#111315]">
+                                            {item.parentName}
+                                          </div>
+                                          <div className="text-[11px] text-[#525866]">
+                                            {item.email}
+                                          </div>
+                                        </td>
+                                        <td className="py-3 px-4">
+                                          {item.gradeApplying} ({item.entryYear})
+                                        </td>
+                                        <td className="py-3 px-4">{item.status}</td>
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {item.submittedAt}
+                                        </td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                disabled={dbBusyKey === delKey}
+                                                onClick={async () => {
+                                                  setDbBusyKey(delKey);
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'admissionsSubmissions',
+                                                    item.id
+                                                  );
+                                                  setDbBusyKey(null);
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (!res.ok) {
+                                                    setAo2ErrorMessage(
+                                                      res.error || 'Could not delete inquiry.'
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                  setAo2SaveMessage(
+                                                    `Deleted inquiry ${item.referenceCode} from database.`
+                                                  );
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white hover:bg-[#991B1B] cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] font-semibold border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 5: Staff Accounts Directory */}
+                      {dbCollection === 'accounts' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] p-5 space-y-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <h5 className="text-sm font-semibold text-[#111315]">
+                                Registered Portal Credentials Table
+                              </h5>
+                              <p className="text-xs text-[#525866]">
+                                Password hashes stay protected inside the server store. Use Staff
+                                &amp; Portal Accounts to update usernames or reset passwords.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setAo2Tab('accounts')}
+                              className="px-3.5 py-2 rounded-lg text-xs font-semibold bg-[#0B291E] text-white hover:bg-[#134231] cursor-pointer whitespace-nowrap shrink-0"
+                            >
+                              Manage Accounts
+                            </button>
+                          </div>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-y border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-2.5 px-3 font-semibold">Role</th>
+                                  <th className="py-2.5 px-3 font-semibold">Account Key</th>
+                                  <th className="py-2.5 px-3 font-semibold">Username</th>
+                                  <th className="py-2.5 px-3 font-semibold">Password Policy</th>
+                                  <th className="py-2.5 px-3 font-semibold">Updated At</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.teacherAccounts ?? teacherAccounts).map((acc) => (
+                                  <tr key={acc.teacherId}>
+                                    <td className="py-2.5 px-3 font-semibold text-[#111315]">
+                                      Teacher
+                                    </td>
+                                    <td className="py-2.5 px-3 font-mono text-[#525866]">
+                                      {acc.teacherId}
+                                    </td>
+                                    <td className="py-2.5 px-3 font-mono">@{acc.username}</td>
+                                    <td className="py-2.5 px-3">
+                                      {acc.hasCustomPassword
+                                        ? 'Custom Password Set'
+                                        : 'Default Password'}
+                                    </td>
+                                    <td className="py-2.5 px-3 font-mono text-[11px] text-[#525866]">
+                                      {acc.updatedAt}
+                                    </td>
+                                  </tr>
+                                ))}
+                                {(dbOverview?.data.principalAccount ?? principalAccount) && (
+                                  <tr>
+                                    <td className="py-2.5 px-3 font-semibold text-[#111315]">
+                                      Principal
+                                    </td>
+                                    <td className="py-2.5 px-3 font-mono text-[#525866]">
+                                      principal
+                                    </td>
+                                    <td className="py-2.5 px-3 font-mono">
+                                      @
+                                      {
+                                        (dbOverview?.data.principalAccount ?? principalAccount)!
+                                          .username
+                                      }
+                                    </td>
+                                    <td className="py-2.5 px-3">
+                                      {(dbOverview?.data.principalAccount ?? principalAccount)!
+                                        .hasCustomPassword
+                                        ? 'Custom Password Set'
+                                        : 'Default Password'}
+                                    </td>
+                                    <td className="py-2.5 px-3 font-mono text-[11px] text-[#525866]">
+                                      {
+                                        (dbOverview?.data.principalAccount ?? principalAccount)!
+                                          .updatedAt
+                                      }
+                                    </td>
+                                  </tr>
+                                )}
+                                {(dbOverview?.data.ao2Account ?? ao2Account) && (
+                                  <tr>
+                                    <td className="py-2.5 px-3 font-semibold text-[#047857]">
+                                      AO-II (Admin)
+                                    </td>
+                                    <td className="py-2.5 px-3 font-mono text-[#525866]">ao2</td>
+                                    <td className="py-2.5 px-3 font-mono">
+                                      @{(dbOverview?.data.ao2Account ?? ao2Account)!.username}
+                                    </td>
+                                    <td className="py-2.5 px-3">
+                                      {(dbOverview?.data.ao2Account ?? ao2Account)!.hasCustomPassword
+                                        ? 'Custom Password Set'
+                                        : 'Default Password'}
+                                    </td>
+                                    <td className="py-2.5 px-3 font-mono text-[11px] text-[#525866]">
+                                      {(dbOverview?.data.ao2Account ?? ao2Account)!.updatedAt}
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 6: Audit Log Records */}
+                      {dbCollection === 'auditLog' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Timestamp</th>
+                                  <th className="py-3 px-4 font-semibold">Actor</th>
+                                  <th className="py-3 px-4 font-semibold">Scope</th>
+                                  <th className="py-3 px-4 font-semibold">Summary</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.auditLog ?? auditLog)
+                                  .filter((entry) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      entry.id.toLowerCase().includes(q) ||
+                                      entry.actor.toLowerCase().includes(q) ||
+                                      entry.scope.toLowerCase().includes(q) ||
+                                      entry.summary.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((entry) => {
+                                    const delKey = `auditLog::${entry.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    return (
+                                      <tr key={entry.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866] whitespace-nowrap">
+                                          {entry.timestamp}
+                                        </td>
+                                        <td className="py-3 px-4 font-semibold text-[#111315]">
+                                          {entry.actor}
+                                        </td>
+                                        <td className="py-3 px-4 text-[#525866]">{entry.scope}</td>
+                                        <td className="py-3 px-4 text-[#111315]">{entry.summary}</td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                disabled={dbBusyKey === delKey}
+                                                onClick={async () => {
+                                                  setDbBusyKey(delKey);
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'auditLog',
+                                                    entry.id
+                                                  );
+                                                  setDbBusyKey(null);
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (!res.ok) {
+                                                    setAo2ErrorMessage(
+                                                      res.error || 'Could not delete audit entry.'
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                  setAo2SaveMessage(
+                                                    `Deleted audit entry ${entry.id}.`
+                                                  );
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white hover:bg-[#991B1B] cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] font-semibold border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 7: JSON Inspector & Restore */}
+                      {dbCollection === 'json' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] p-5 space-y-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <h5 className="text-sm font-semibold text-[#111315]">
+                                Raw JSON Database Inspector &amp; Restore
+                              </h5>
+                              <p className="text-xs text-[#525866]">
+                                Inspect live collections, load a previously exported backup file, or
+                                apply JSON updates directly to `.data/school_state.json`. Staff
+                                password hashes remain preserved.
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  await navigator.clipboard?.writeText(dbJsonDraft);
+                                  setDbCopied(true);
+                                  setTimeout(() => setDbCopied(false), 1800);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-[#DCE0E6] text-[#111315] hover:bg-[#F8FAFC] cursor-pointer"
+                              >
+                                {dbCopied ? (
+                                  <Check className="w-3.5 h-3.5 text-[#047857]" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                                <span>{dbCopied ? 'Copied' : 'Copy JSON'}</span>
+                              </button>
+                              <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-[#DCE0E6] text-[#111315] hover:bg-[#F8FAFC] cursor-pointer">
+                                <Upload className="w-3.5 h-3.5" />
+                                <span>Load .json File</span>
+                                <input
+                                  type="file"
+                                  accept=".json,application/json"
+                                  className="hidden"
+                                  onChange={async (e) => {
+                                    const file = e.target.files?.[0];
+                                    if (!file) return;
+                                    const text = await file.text();
+                                    setDbJsonDraft(text);
+                                    setAo2SaveMessage(`Loaded ${file.name} into JSON editor.`);
+                                  }}
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (dbOverview) {
+                                    setDbJsonDraft(JSON.stringify(dbOverview.data, null, 2));
+                                    setAo2SaveMessage('Reset JSON editor to live database state.');
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-[#DCE0E6] text-[#525866] hover:text-[#111315] cursor-pointer"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>Reload Live JSON</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <textarea
+                            value={dbJsonDraft}
+                            onChange={(e) => setDbJsonDraft(e.target.value)}
+                            rows={16}
+                            spellCheck={false}
+                            aria-label="Database JSON editor"
+                            className="w-full rounded-lg border border-[#DCE0E6] bg-[#0F172A] text-[#E2E8F0] font-mono text-xs p-4 leading-relaxed focus:outline-none focus:ring-2 focus:ring-[#10B981]"
+                          />
+
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <span className="text-[11px] text-[#525866]">
+                              Accepted top-level keys: <code>frontendConfig</code>,{' '}
+                              <code>backendConfig</code>, <code>enrollmentByYear</code>,{' '}
+                              <code>inventoryItems</code>, <code>uploadedDocuments</code>,{' '}
+                              <code>admissionsSubmissions</code>.
+                            </span>
+                            <button
+                              type="button"
+                              disabled={dbBusyKey === 'restore'}
+                              onClick={async () => {
+                                setAo2ErrorMessage('');
+                                setAo2SaveMessage('');
+                                let parsed: Partial<SchoolSystemBootstrap>;
+                                try {
+                                  parsed = JSON.parse(dbJsonDraft) as Partial<SchoolSystemBootstrap>;
+                                } catch {
+                                  setAo2ErrorMessage(
+                                    'Invalid JSON syntax. Please check brackets, quotes, and commas.'
+                                  );
+                                  return;
+                                }
+                                setDbBusyKey('restore');
+                                const res = await onAo2RestoreDatabase(parsed);
+                                setDbBusyKey(null);
+                                if (!res.ok) {
+                                  setAo2ErrorMessage(res.error || 'Could not restore database JSON.');
+                                  return;
+                                }
+                                if (res.overview) {
+                                  setDbOverview(res.overview);
+                                  setDbJsonDraft(JSON.stringify(res.overview.data, null, 2));
+                                }
+                                setAo2SaveMessage(
+                                  'Database JSON restored and saved to .data/school_state.json.'
+                                );
+                              }}
+                              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-[#047857] hover:bg-[#065F46] text-white transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
+                            >
+                              <Database className="w-3.5 h-3.5" />
+                              <span>
+                                {dbBusyKey === 'restore' ? 'Applying...' : 'Apply & Save to Database'}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

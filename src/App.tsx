@@ -30,6 +30,8 @@ import {
 import {
   AdminAuditEntry,
   AdmissionsSubmission,
+  DatabaseOverview,
+  DatabaseRecordCollection,
   InventoryItem,
   PrincipalDocumentStatus,
   SchoolSystemBootstrap,
@@ -710,6 +712,110 @@ export default function App() {
     return { ok: true };
   };
 
+  const applyDatabaseBootstrap = (data: SchoolSystemBootstrap) => {
+    setFrontendConfig(data.frontendConfig);
+    setBackendConfig(data.backendConfig);
+    setEnrollmentByYear(data.enrollmentByYear);
+    setUploadedDocuments(data.uploadedDocuments);
+    setAdmissionsSubmissions(data.admissionsSubmissions);
+    setInventoryItems(data.inventoryItems ?? []);
+    setAuditLog(data.auditLog);
+    setTeacherAccounts(data.teacherAccounts ?? []);
+    setPrincipalAccount(data.principalAccount ?? null);
+    setAo2Account(data.ao2Account ?? null);
+  };
+
+  const handleAo2FetchDatabase = async (): Promise<{
+    ok: boolean;
+    overview?: DatabaseOverview;
+    error?: string;
+  }> => {
+    const res = await fetch('/api/admin/database', {
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: payload.error || 'Could not load database overview.' };
+    }
+    const overview = payload as DatabaseOverview;
+    applyDatabaseBootstrap(overview.data);
+    return { ok: true, overview };
+  };
+
+  const handleAo2UpdateDbEnrollmentRow = async (payload: {
+    year: AcademicYear;
+    gradeId: string;
+    enrolledStudents: number;
+    capacity: number;
+    teachers: number;
+    sections: number;
+    facultyLead: string;
+  }): Promise<{ ok: boolean; overview?: DatabaseOverview; error?: string }> => {
+    const res = await fetch('/api/admin/database/enrollment-row', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not update enrollment record.' };
+    }
+    const overview = data as DatabaseOverview;
+    applyDatabaseBootstrap(overview.data);
+    return { ok: true, overview };
+  };
+
+  const handleAo2DeleteDbRecord = async (
+    collection: DatabaseRecordCollection,
+    id: string
+  ): Promise<{ ok: boolean; overview?: DatabaseOverview; error?: string }> => {
+    const res = await fetch(
+      `/api/admin/database/records/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'x-admin-role': 'AO-II',
+          'x-ao2-token': ao2Session?.token ?? '',
+        },
+      }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not delete database record.' };
+    }
+    const overview = data as DatabaseOverview;
+    applyDatabaseBootstrap(overview.data);
+    return { ok: true, overview };
+  };
+
+  const handleAo2RestoreDatabase = async (
+    payload: Partial<SchoolSystemBootstrap>
+  ): Promise<{ ok: boolean; overview?: DatabaseOverview; error?: string }> => {
+    const res = await fetch('/api/admin/database/restore', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not restore database JSON.' };
+    }
+    const overview = data as DatabaseOverview;
+    applyDatabaseBootstrap(overview.data);
+    return { ok: true, overview };
+  };
+
   const handleResetSystemDefaults = async () => {
     const res = await fetch('/api/admin/reset', {
       method: 'POST',
@@ -720,16 +826,7 @@ export default function App() {
     });
     if (res.ok) {
       const data = (await res.json()) as SchoolSystemBootstrap;
-      setFrontendConfig(data.frontendConfig);
-      setBackendConfig(data.backendConfig);
-      setEnrollmentByYear(data.enrollmentByYear);
-      setUploadedDocuments(data.uploadedDocuments);
-      setAdmissionsSubmissions(data.admissionsSubmissions);
-      setInventoryItems(data.inventoryItems ?? []);
-      setAuditLog(data.auditLog);
-      setTeacherAccounts(data.teacherAccounts ?? []);
-      setPrincipalAccount(data.principalAccount ?? null);
-      setAo2Account(data.ao2Account ?? null);
+      applyDatabaseBootstrap(data);
       setTeacherSession(null);
       setPrincipalSession(null);
       setAo2Session(null);
@@ -809,6 +906,10 @@ export default function App() {
             onAo2AddInventoryItem={handleAo2AddInventoryItem}
             onAo2UpdateInventoryItem={handleAo2UpdateInventoryItem}
             onAo2DeleteInventoryItem={handleAo2DeleteInventoryItem}
+            onAo2FetchDatabase={handleAo2FetchDatabase}
+            onAo2UpdateDbEnrollmentRow={handleAo2UpdateDbEnrollmentRow}
+            onAo2DeleteDbRecord={handleAo2DeleteDbRecord}
+            onAo2RestoreDatabase={handleAo2RestoreDatabase}
             onResetSystemDefaults={handleResetSystemDefaults}
           />
         </main>

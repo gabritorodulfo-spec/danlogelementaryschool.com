@@ -8,6 +8,8 @@ import { INITIAL_ENROLLMENT_BY_YEAR, type AcademicYear, type GradeEnrollmentRow 
 import type {
   AdminAuditEntry,
   AdmissionsSubmission,
+  DatabaseOverview,
+  DatabaseRecordCollection,
   InventoryItem,
   InventoryStatus,
   SchoolSystemBootstrap,
@@ -1536,6 +1538,255 @@ async function startServer() {
       inventoryItems: store.inventoryItems,
       auditLog: store.auditLog,
     });
+  });
+
+  function buildDatabaseOverview(): DatabaseOverview {
+    if (!fs.existsSync(STORE_PATH)) {
+      saveStore(store);
+    }
+    let fileSizeBytes = 0;
+    let lastModifiedAt = new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+    try {
+      const stat = fs.statSync(STORE_PATH);
+      fileSizeBytes = stat.size;
+      lastModifiedAt = stat.mtime.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    } catch {
+      fileSizeBytes = Buffer.byteLength(JSON.stringify(store), 'utf-8');
+    }
+
+    const bootstrap = toBootstrapPayload(store);
+    const enrollmentRows =
+      (bootstrap.enrollmentByYear['2026-2027']?.length ?? 0) +
+      (bootstrap.enrollmentByYear['2025-2026']?.length ?? 0);
+
+    return {
+      engine: 'Express JSON Persistent Store',
+      storePath: '.data/school_state.json',
+      fileSizeBytes,
+      lastModifiedAt,
+      counts: {
+        enrollmentRows,
+        inventoryItems: bootstrap.inventoryItems.length,
+        uploadedDocuments: bootstrap.uploadedDocuments.length,
+        admissionsSubmissions: bootstrap.admissionsSubmissions.length,
+        staffAccounts: bootstrap.teacherAccounts.length + 2,
+        auditLog: bootstrap.auditLog.length,
+      },
+      data: bootstrap,
+    };
+  }
+
+  app.get('/api/admin/database', requireAoII, (_req, res) => {
+    res.json(buildDatabaseOverview());
+  });
+
+  app.patch('/api/admin/database/enrollment-row', requireAoII, (req, res) => {
+    const { year, gradeId, enrolledStudents, capacity, teachers, sections, facultyLead } =
+      req.body as {
+        year: AcademicYear;
+        gradeId: string;
+        enrolledStudents?: number;
+        capacity?: number;
+        teachers?: number;
+        sections?: number;
+        facultyLead?: string;
+      };
+
+    const rows = store.enrollmentByYear[year];
+    if (!rows) {
+      res.status(400).json({ error: 'Invalid academic year.' });
+      return;
+    }
+
+    const exists = rows.some((row) => row.id === gradeId);
+    if (!exists) {
+      res.status(404).json({ error: 'Grade row not found.' });
+      return;
+    }
+
+    store.enrollmentByYear[year] = rows.map((row: GradeEnrollmentRow) => {
+      if (row.id !== gradeId) return row;
+      const nextCap =
+        capacity !== undefined
+          ? Math.max(10, Math.min(200, Math.round(Number(capacity) || row.capacity)))
+          : row.capacity;
+      const nextEnrolled =
+        enrolledStudents !== undefined
+          ? Math.max(0, Math.min(nextCap + 25, Math.round(Number(enrolledStudents) || 0)))
+          : row.enrolledStudents;
+      const nextTeachers =
+        teachers !== undefined
+          ? Math.max(1, Math.min(35, Math.round(Number(teachers) || 1)))
+          : row.teachers;
+      const nextSections =
+        sections !== undefined
+          ? Math.max(1, Math.min(20, Math.round(Number(sections) || 1)))
+          : row.sections;
+      const nextLead =
+        facultyLead !== undefined && facultyLead.trim().length > 1
+          ? facultyLead.trim()
+          : row.facultyLead;
+
+      return {
+        ...row,
+        capacity: nextCap,
+        enrolledStudents: nextEnrolled,
+        teachers: nextTeachers,
+        sections: nextSections,
+        facultyLead: nextLead,
+      };
+    });
+
+    appendAudit(
+      store,
+      'Database',
+      `Edited database enrollment row ${gradeId.toUpperCase()} (${year}) directly.`
+    );
+    saveStore(store);
+    res.json(buildDatabaseOverview());
+  });
+
+  app.delete('/api/admin/database/records/:collection/:id', requireAoII, (req, res) => {
+    const collection = req.params.collection as DatabaseRecordCollection;
+    const { id } = req.params;
+
+    if (collection === 'inventoryItems') {
+      const target = store.inventoryItems.find((item) => item.id === id);
+      if (!target) {
+        res.status(404).json({ error: 'Inventory record not found.' });
+        return;
+      }
+      store.inventoryItems = store.inventoryItems.filter((item) => item.id !== id);
+      appendAudit(
+        store,
+        'Database',
+        `Deleted inventory record "${target.itemName}" (${id}) from database.`
+      );
+    } else if (collection === 'uploadedDocuments') {
+      const target = store.uploadedDocuments.find((doc) => doc.id === id);
+      if (!target) {
+        res.status(404).json({ error: 'Document record not found.' });
+        return;
+      }
+      const storedPath = path.join(
+        UPLOADS_DIR,
+        `${target.id}_${sanitizeFileName(target.fileName)}`
+      );
+      fs.rmSync(storedPath, { force: true });
+      store.uploadedDocuments = store.uploadedDocuments.filter((doc) => doc.id !== id);
+      appendAudit(
+        store,
+        'Database',
+        `Deleted uploaded document "${target.title}" (${id}) from database.`
+      );
+    } else if (collection === 'admissionsSubmissions') {
+      const target = store.admissionsSubmissions.find((item) => item.id === id);
+      if (!target) {
+        res.status(404).json({ error: 'Parent inquiry record not found.' });
+        return;
+      }
+      store.admissionsSubmissions = store.admissionsSubmissions.filter((item) => item.id !== id);
+      appendAudit(
+        store,
+        'Database',
+        `Deleted parent inquiry "${target.parentName}" (${target.referenceCode}) from database.`
+      );
+    } else if (collection === 'auditLog') {
+      const target = store.auditLog.find((entry) => entry.id === id);
+      if (!target) {
+        res.status(404).json({ error: 'Audit entry not found.' });
+        return;
+      }
+      store.auditLog = store.auditLog.filter((entry) => entry.id !== id);
+    } else {
+      res.status(400).json({ error: 'Unsupported database collection.' });
+      return;
+    }
+
+    saveStore(store);
+    res.json(buildDatabaseOverview());
+  });
+
+  app.post('/api/admin/database/restore', requireAoII, (req, res) => {
+    const incoming = (req.body ?? {}) as Partial<SchoolSystemBootstrap>;
+    if (!incoming || typeof incoming !== 'object') {
+      res.status(400).json({ error: 'Provide a valid JSON database backup object.' });
+      return;
+    }
+
+    const updatedSections: string[] = [];
+
+    if (incoming.frontendConfig && typeof incoming.frontendConfig === 'object') {
+      store.frontendConfig = {
+        ...store.frontendConfig,
+        ...incoming.frontendConfig,
+        visibleSections: {
+          ...store.frontendConfig.visibleSections,
+          ...(incoming.frontendConfig.visibleSections ?? {}),
+        },
+      };
+      updatedSections.push('frontendConfig');
+    }
+
+    if (incoming.backendConfig && typeof incoming.backendConfig === 'object') {
+      store.backendConfig = {
+        ...store.backendConfig,
+        ...incoming.backendConfig,
+      };
+      updatedSections.push('backendConfig');
+    }
+
+    if (
+      incoming.enrollmentByYear &&
+      Array.isArray(incoming.enrollmentByYear['2026-2027']) &&
+      Array.isArray(incoming.enrollmentByYear['2025-2026'])
+    ) {
+      store.enrollmentByYear = incoming.enrollmentByYear;
+      updatedSections.push('enrollmentByYear');
+    }
+
+    if (Array.isArray(incoming.inventoryItems)) {
+      store.inventoryItems = incoming.inventoryItems;
+      updatedSections.push('inventoryItems');
+    }
+
+    if (Array.isArray(incoming.uploadedDocuments)) {
+      store.uploadedDocuments = incoming.uploadedDocuments;
+      updatedSections.push('uploadedDocuments');
+    }
+
+    if (Array.isArray(incoming.admissionsSubmissions)) {
+      store.admissionsSubmissions = incoming.admissionsSubmissions;
+      updatedSections.push('admissionsSubmissions');
+    }
+
+    if (updatedSections.length === 0) {
+      res.status(400).json({
+        error:
+          'No recognized database collections found (expected enrollmentByYear, inventoryItems, uploadedDocuments, admissionsSubmissions, frontendConfig, or backendConfig).',
+      });
+      return;
+    }
+
+    appendAudit(
+      store,
+      'Database',
+      `Imported/restored database collections: ${updatedSections.join(', ')}.`
+    );
+    saveStore(store);
+    res.json(buildDatabaseOverview());
   });
 
   app.get('/api/admin/export', requireAoII, (_req, res) => {

@@ -98,7 +98,8 @@ export interface AdminAuditEntry {
     | 'Faculty Auth'
     | 'Account Auth'
     | 'Endorsement'
-    | 'Inventory';
+    | 'Inventory'
+    | 'Database';
   summary: string;
   timestamp: string;
 }
@@ -124,4 +125,26 @@ export interface SchoolSystemBootstrap {
   teacherAccounts: TeacherAccountSummary[];
   principalAccount: StaffAccountSummary;
   ao2Account: StaffAccountSummary;
+}
+
+export type DatabaseRecordCollection =
+  | 'inventoryItems'
+  | 'uploadedDocuments'
+  | 'admissionsSubmissions'
+  | 'auditLog';
+
+export interface DatabaseOverview {
+  engine: string;
+  storePath: string;
+  fileSizeBytes: number;
+  lastModifiedAt: string;
+  counts: {
+    enrollmentRows: number;
+    inventoryItems: number;
+    uploadedDocuments: number;
+    admissionsSubmissions: number;
+    staffAccounts: number;
+    auditLog: number;
+  };
+  data: SchoolSystemBootstrap;
 }
