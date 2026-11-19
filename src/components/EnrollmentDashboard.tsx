@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  ArrowDownUp,
   BookOpen,
   Building2,
   GraduationCap,
@@ -9,6 +10,7 @@ import {
   Search,
   ShieldCheck,
   Users,
+  X,
 } from 'lucide-react';
 import {
   AcademicYear,
@@ -16,8 +18,9 @@ import {
   FACULTY_BY_DEPARTMENT,
   GradeEnrollmentRow,
 } from '../data/schoolData';
+import type { StaffMemberRecord } from '../types/schoolConfig';
 
-type SortOption = 'grade' | 'enrollment' | 'teachers';
+type SortOption = 'grade' | 'enrollment' | 'teachers' | 'capacity' | 'fillRate' | 'ratio' | 'sections';
 
 const DIVISION_TABS: DivisionFilter[] = [
   'All Grades',
@@ -35,6 +38,7 @@ const DEPARTMENT_SWATCHES = [
 
 interface EnrollmentDashboardProps {
   enrollmentByYear: Record<AcademicYear, GradeEnrollmentRow[]>;
+  staffRecords?: StaffMemberRecord[];
   defaultYear: AcademicYear;
   accentColor: string;
   canEdit: boolean;
@@ -50,6 +54,7 @@ interface EnrollmentDashboardProps {
 
 export function EnrollmentDashboard({
   enrollmentByYear,
+  staffRecords = [],
   defaultYear,
   accentColor,
   canEdit,
@@ -62,6 +67,8 @@ export function EnrollmentDashboard({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortOption>('grade');
   const [hoveredGradeId, setHoveredGradeId] = useState<string | null>(null);
+  const [selectedGradeId, setSelectedGradeId] = useState<string | null>(null);
+  const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null);
 
   useEffect(() => {
     setAcademicYear(defaultYear);
@@ -85,6 +92,18 @@ export function EnrollmentDashboard({
     return [...filtered].sort((a, b) => {
       if (sortBy === 'enrollment') return b.enrolledStudents - a.enrolledStudents;
       if (sortBy === 'teachers') return b.teachers - a.teachers;
+      if (sortBy === 'capacity') return b.capacity - a.capacity;
+      if (sortBy === 'sections') return b.sections - a.sections;
+      if (sortBy === 'fillRate') {
+        const fillA = a.capacity > 0 ? a.enrolledStudents / a.capacity : 0;
+        const fillB = b.capacity > 0 ? b.enrolledStudents / b.capacity : 0;
+        return fillB - fillA;
+      }
+      if (sortBy === 'ratio') {
+        const rA = a.teachers > 0 ? a.enrolledStudents / a.teachers : 0;
+        const rB = b.teachers > 0 ? b.enrolledStudents / b.teachers : 0;
+        return rB - rA;
+      }
       return a.gradeOrder - b.gradeOrder;
     });
   }, [currentYearRows, divisionFilter, searchQuery, sortBy]);
@@ -112,6 +131,11 @@ export function EnrollmentDashboard({
     [currentYearRows]
   );
 
+  const selectedGrade = useMemo(
+    () => currentYearRows.find((r) => r.id === selectedGradeId) ?? null,
+    [currentYearRows, selectedGradeId]
+  );
+
   const departmentBreakdown = FACULTY_BY_DEPARTMENT[academicYear];
 
   const handleDelta = (
@@ -126,6 +150,31 @@ export function EnrollmentDashboard({
     } else {
       const next = Math.max(1, Math.min(25, row.teachers + delta));
       void onUpdateEnrollment(academicYear, row.id, field, next);
+    }
+  };
+
+  const cycleDivision = () => {
+    setSelectedDepartment(null);
+    setDivisionFilter((prev) => {
+      const idx = DIVISION_TABS.indexOf(prev);
+      return DIVISION_TABS[(idx + 1) % DIVISION_TABS.length];
+    });
+  };
+
+  const handleDepartmentClick = (deptName: string, scope: string) => {
+    if (selectedDepartment === deptName) {
+      setSelectedDepartment(null);
+      setDivisionFilter('All Grades');
+      return;
+    }
+    setSelectedDepartment(deptName);
+    const lower = scope.toLowerCase();
+    if (lower.includes('primary') || lower.includes('k–3') || lower.includes('k-3')) {
+      setDivisionFilter('Primary (K–3)');
+    } else if (lower.includes('intermediate') || lower.includes('4–6') || lower.includes('4-6')) {
+      setDivisionFilter('Intermediate (4–6)');
+    } else {
+      setDivisionFilter('All Grades');
     }
   };
 
@@ -155,8 +204,8 @@ export function EnrollmentDashboard({
                 Students enrolled per grade level and teaching faculty distribution.
               </h2>
               <p className="text-sm md:text-base text-[#D7E9E0]">
-                Inspect Kindergarten through Grade 6 class sizes, seat capacities managed by AO-II,
-                and dedicated elementary classroom teachers.
+                Click any summary card, chart column, department, or table row to drill into
+                Kindergarten through Grade 6 class sizes and seat capacities.
               </p>
             </div>
 
@@ -187,9 +236,20 @@ export function EnrollmentDashboard({
           </div>
         </div>
 
-        {/* 4 Color-Coded Summary KPI Cards */}
+        {/* 4 Interactive Color-Coded Summary KPI Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-gradient-to-br from-white to-[#ECFDF5] rounded-xl border border-[#BBF7D0] overflow-hidden shadow-xs">
+          <button
+            type="button"
+            onClick={() =>
+              setSortBy((prev) => (prev === 'enrollment' ? 'grade' : 'enrollment'))
+            }
+            aria-pressed={sortBy === 'enrollment'}
+            className={`text-left bg-gradient-to-br from-white to-[#ECFDF5] rounded-xl border overflow-hidden shadow-xs transition-all cursor-pointer ${
+              sortBy === 'enrollment'
+                ? 'border-[#15803D] ring-2 ring-[#15803D]/25'
+                : 'border-[#BBF7D0] hover:border-[#15803D]'
+            }`}
+          >
             <div className="h-1 w-full bg-[#15803D]" />
             <div className="p-5 space-y-2">
               <div className="flex items-center justify-between gap-2">
@@ -206,10 +266,24 @@ export function EnrollmentDashboard({
                   {totals.fillPct}% of {totals.totalCapacity} seats
                 </span>
               </div>
+              <div className="text-[11px] font-medium text-[#15803D]">
+                {sortBy === 'enrollment' ? 'Sorted by enrollment ↓' : 'Click to sort by enrollment'}
+              </div>
             </div>
-          </div>
+          </button>
 
-          <div className="bg-gradient-to-br from-white to-[#EFF6FF] rounded-xl border border-[#BFDBFE] overflow-hidden shadow-xs">
+          <button
+            type="button"
+            onClick={() =>
+              setSortBy((prev) => (prev === 'teachers' ? 'grade' : 'teachers'))
+            }
+            aria-pressed={sortBy === 'teachers'}
+            className={`text-left bg-gradient-to-br from-white to-[#EFF6FF] rounded-xl border overflow-hidden shadow-xs transition-all cursor-pointer ${
+              sortBy === 'teachers'
+                ? 'border-[#1D4ED8] ring-2 ring-[#1D4ED8]/25'
+                : 'border-[#BFDBFE] hover:border-[#1D4ED8]'
+            }`}
+          >
             <div className="h-1 w-full bg-[#1D4ED8]" />
             <div className="p-5 space-y-2">
               <div className="flex items-center justify-between gap-2">
@@ -224,10 +298,22 @@ export function EnrollmentDashboard({
                 </span>
                 <span className="text-xs font-medium text-[#1D4ED8]">Full-Time Faculty</span>
               </div>
+              <div className="text-[11px] font-medium text-[#1D4ED8]">
+                {sortBy === 'teachers' ? 'Sorted by teachers ↓' : 'Click to sort by faculty'}
+              </div>
             </div>
-          </div>
+          </button>
 
-          <div className="bg-gradient-to-br from-white to-[#FFFBEB] rounded-xl border border-[#FDE68A] overflow-hidden shadow-xs">
+          <button
+            type="button"
+            onClick={() => setSortBy((prev) => (prev === 'ratio' ? 'grade' : 'ratio'))}
+            aria-pressed={sortBy === 'ratio'}
+            className={`text-left bg-gradient-to-br from-white to-[#FFFBEB] rounded-xl border overflow-hidden shadow-xs transition-all cursor-pointer ${
+              sortBy === 'ratio'
+                ? 'border-[#D97706] ring-2 ring-[#D97706]/25'
+                : 'border-[#FDE68A] hover:border-[#D97706]'
+            }`}
+          >
             <div className="h-1 w-full bg-[#D97706]" />
             <div className="p-5 space-y-2">
               <div className="flex items-center justify-between gap-2">
@@ -242,10 +328,21 @@ export function EnrollmentDashboard({
                 </span>
                 <span className="text-xs font-medium text-[#B45309]">Filtered Cohort</span>
               </div>
+              <div className="text-[11px] font-medium text-[#B45309]">
+                {sortBy === 'ratio' ? 'Sorted by ratio ↓' : 'Click to rank class ratios'}
+              </div>
             </div>
-          </div>
+          </button>
 
-          <div className="bg-gradient-to-br from-white to-[#F0FDFA] rounded-xl border border-[#99F6E4] overflow-hidden shadow-xs">
+          <button
+            type="button"
+            onClick={cycleDivision}
+            className={`text-left bg-gradient-to-br from-white to-[#F0FDFA] rounded-xl border overflow-hidden shadow-xs transition-all cursor-pointer ${
+              divisionFilter !== 'All Grades'
+                ? 'border-[#0F766E] ring-2 ring-[#0F766E]/25'
+                : 'border-[#99F6E4] hover:border-[#0F766E]'
+            }`}
+          >
             <div className="h-1 w-full bg-[#0F766E]" />
             <div className="p-5 space-y-2">
               <div className="flex items-center justify-between gap-2">
@@ -262,8 +359,11 @@ export function EnrollmentDashboard({
                   {filteredRows.length} Grade Levels
                 </span>
               </div>
+              <div className="text-[11px] font-medium text-[#0F766E]">
+                Division: {divisionFilter} (click to cycle)
+              </div>
             </div>
-          </div>
+          </button>
         </div>
 
         {/* Filter & Search Toolbar */}
@@ -279,7 +379,10 @@ export function EnrollmentDashboard({
                 <button
                   key={tab}
                   type="button"
-                  onClick={() => setDivisionFilter(tab)}
+                  onClick={() => {
+                    setDivisionFilter(tab);
+                    setSelectedDepartment(null);
+                  }}
                   aria-pressed={active}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                     active
@@ -315,6 +418,10 @@ export function EnrollmentDashboard({
               <option value="grade">Sort: Kindergarten → Grade 6</option>
               <option value="enrollment">Sort: Highest Enrollment</option>
               <option value="teachers">Sort: Most Teachers</option>
+              <option value="fillRate">Sort: Highest Fill Rate</option>
+              <option value="capacity">Sort: Seat Capacity</option>
+              <option value="ratio">Sort: Pupil-Teacher Ratio</option>
+              <option value="sections">Sort: Most Sections</option>
             </select>
           </div>
         </div>
@@ -328,7 +435,7 @@ export function EnrollmentDashboard({
                   Enrolled Students vs. Grade Capacity ({academicYear})
                 </h3>
                 <p className="text-xs text-[#525866]">
-                  Color-coded by division against total classroom seat capacity.
+                  Click any grade bar to inspect room capacity, advisor, and section breakdown.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-4 text-xs text-[#475569] font-medium">
@@ -347,7 +454,7 @@ export function EnrollmentDashboard({
               </div>
             </div>
 
-            <div className="p-6 flex-1 flex flex-col justify-end">
+            <div className="p-6 flex-1 flex flex-col justify-end space-y-5">
               {filteredRows.length === 0 ? (
                 <div className="py-12 text-center space-y-3 border border-dashed border-[#C6D5CC] rounded-xl bg-[#F7FAF8]">
                   <p className="text-sm font-medium text-[#111315]">
@@ -358,6 +465,8 @@ export function EnrollmentDashboard({
                     onClick={() => {
                       setSearchQuery('');
                       setDivisionFilter('All Grades');
+                      setSelectedDepartment(null);
+                      setSelectedGradeId(null);
                     }}
                     style={{ backgroundColor: accentColor }}
                     className="px-4 py-2 text-xs font-semibold text-white rounded-lg cursor-pointer"
@@ -388,7 +497,8 @@ export function EnrollmentDashboard({
                           row.capacity > 0
                             ? Math.min(100, Math.round((row.enrolledStudents / row.capacity) * 100))
                             : 0;
-                        const isHighlighted = hoveredGradeId === row.id;
+                        const isSelected = selectedGradeId === row.id;
+                        const isHighlighted = hoveredGradeId === row.id || isSelected;
                         const isPrimary = row.division === 'Primary (K–3)';
                         const barColor = isPrimary
                           ? isHighlighted
@@ -399,13 +509,19 @@ export function EnrollmentDashboard({
                             : '#0284C7';
 
                         return (
-                          <div
+                          <button
                             key={row.id}
+                            type="button"
+                            onClick={() =>
+                              setSelectedGradeId((prev) => (prev === row.id ? null : row.id))
+                            }
                             onMouseEnter={() => setHoveredGradeId(row.id)}
                             onMouseLeave={() => setHoveredGradeId(null)}
-                            className={`h-full flex flex-col items-center justify-end gap-1.5 transition-opacity duration-150 ${
+                            aria-pressed={isSelected}
+                            aria-label={`Inspect ${row.gradeLabel}: ${row.enrolledStudents} of ${row.capacity} pupils`}
+                            className={`h-full flex flex-col items-center justify-end gap-1.5 transition-opacity duration-150 cursor-pointer rounded-lg p-1 ${
                               isVisible ? 'opacity-100' : 'opacity-25'
-                            }`}
+                            } ${isSelected ? 'bg-[#ECFDF5] ring-1 ring-[#15803D]/40' : ''}`}
                           >
                             <span className="font-mono text-xs tabular-nums font-semibold text-[#111315]">
                               {row.enrolledStudents}
@@ -425,7 +541,7 @@ export function EnrollmentDashboard({
                                 />
                               </div>
                             </div>
-                          </div>
+                          </button>
                         );
                       })}
                     </div>
@@ -434,8 +550,18 @@ export function EnrollmentDashboard({
                   <div className="grid grid-cols-7 gap-3 sm:gap-4 pt-2.5 text-center">
                     {currentYearRows.map((row) => {
                       const isPrimary = row.division === 'Primary (K–3)';
+                      const isSelected = selectedGradeId === row.id;
                       return (
-                        <div key={row.id} className="space-y-0.5">
+                        <button
+                          key={row.id}
+                          type="button"
+                          onClick={() =>
+                            setSelectedGradeId((prev) => (prev === row.id ? null : row.id))
+                          }
+                          className={`space-y-0.5 rounded-md py-1 cursor-pointer transition-colors ${
+                            isSelected ? 'bg-[#ECFDF5]' : 'hover:bg-[#F5F9F6]'
+                          }`}
+                        >
                           <div className="text-xs font-semibold text-[#111315]">
                             {row.shortLabel}
                           </div>
@@ -446,9 +572,66 @@ export function EnrollmentDashboard({
                           >
                             {row.teachers}T
                           </div>
-                        </div>
+                        </button>
                       );
                     })}
+                  </div>
+                </div>
+              )}
+
+              {/* Interactive Selected Grade Spotlight */}
+              {selectedGrade && (
+                <div className="rounded-xl border border-[#A7F3D0] bg-[#F3FBF7] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="text-[11px] font-semibold text-[#047857]">
+                      Selected Grade · {selectedGrade.division}
+                    </div>
+                    <div className="text-sm font-semibold text-[#111315]">
+                      {selectedGrade.gradeLabel} — Lead: {selectedGrade.facultyLead}
+                    </div>
+                    <div className="text-xs text-[#525866]">
+                      Focus: {selectedGrade.curriculumFocus} ·{' '}
+                      <span className="font-mono tabular-nums font-semibold text-[#111315]">
+                        {selectedGrade.enrolledStudents}/{selectedGrade.capacity} seats (
+                        {Math.max(0, selectedGrade.capacity - selectedGrade.enrolledStudents)} open)
+                      </span>{' '}
+                      · {selectedGrade.sections} sections · {selectedGrade.teachers} teachers
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {canEdit && (
+                      <div className="inline-flex items-center gap-1.5 bg-white px-2.5 py-1.5 rounded-lg border border-[#CBD8D0]">
+                        <span className="text-[11px] font-semibold text-[#525866]">Students:</span>
+                        <button
+                          type="button"
+                          onClick={() => handleDelta(selectedGrade, 'enrolledStudents', -1)}
+                          className="w-6 h-6 inline-flex items-center justify-center rounded border border-[#DCE0E6] hover:bg-[#F8F9FA] cursor-pointer"
+                          aria-label={`Decrease enrolled students for ${selectedGrade.gradeLabel}`}
+                        >
+                          <Minus className="w-3 h-3" />
+                        </button>
+                        <span className="font-mono text-xs font-semibold tabular-nums w-6 text-center">
+                          {selectedGrade.enrolledStudents}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleDelta(selectedGrade, 'enrolledStudents', 1)}
+                          className="w-6 h-6 inline-flex items-center justify-center rounded border border-[#DCE0E6] hover:bg-[#F8F9FA] cursor-pointer"
+                          aria-label={`Increase enrolled students for ${selectedGrade.gradeLabel}`}
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedGradeId(null)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-[#525866] hover:text-[#111315] bg-white border border-[#DCE0E6] rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Close</span>
+                    </button>
                   </div>
                 </div>
               )}
@@ -457,40 +640,60 @@ export function EnrollmentDashboard({
 
           <div className="lg:col-span-4 bg-white/95 backdrop-blur-xs rounded-xl border border-[#D2DFD7] overflow-hidden flex flex-col justify-between shadow-xs">
             <div className="px-6 py-4 bg-gradient-to-r from-[#EFF6FF]/90 to-[#F0FDFA]/90 border-b border-[#DCE6E0] space-y-1">
-              <h3 className="font-display text-lg font-semibold text-[#111315]">
-                Teachers by Department
-              </h3>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-display text-lg font-semibold text-[#111315]">
+                  Teachers by Department
+                </h3>
+                {selectedDepartment && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedDepartment(null);
+                      setDivisionFilter('All Grades');
+                    }}
+                    className="text-[11px] font-semibold text-[#15803D] hover:underline cursor-pointer"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
               <p className="text-xs text-[#525866]">
-                {academicYear} instructional faculty distribution across disciplines.
+                Click a department to scope the dashboard to its grade division.
               </p>
             </div>
 
-            <dl className="divide-y divide-[#E5ECE8] flex-1 px-6">
+            <div className="divide-y divide-[#E5ECE8] flex-1 px-4 py-1">
               {departmentBreakdown.map((dept, index) => {
                 const badgeClass =
                   DEPARTMENT_SWATCHES[index % DEPARTMENT_SWATCHES.length];
+                const active = selectedDepartment === dept.department;
                 return (
-                  <div
+                  <button
                     key={dept.department}
-                    className="py-3.5 flex items-center justify-between gap-4"
+                    type="button"
+                    onClick={() => handleDepartmentClick(dept.department, dept.divisionScope)}
+                    aria-pressed={active}
+                    className={`w-full text-left py-3 px-2 rounded-lg flex items-center justify-between gap-4 transition-colors cursor-pointer ${
+                      active ? 'bg-[#ECFDF5]' : 'hover:bg-[#F8FAF9]'
+                    }`}
                   >
-                    <dt className="space-y-0.5">
-                      <div className="text-xs font-semibold text-[#111315]">
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="text-xs font-semibold text-[#111315] truncate">
                         {dept.department}
                       </div>
                       <div className="text-[11px] text-[#525866]">
                         {dept.divisionScope} · {dept.advancedDegreesPct} Adv. Degrees
                       </div>
-                    </dt>
-                    <dd
+                    </div>
+                    <span
                       className={`font-mono text-xs font-semibold tabular-nums shrink-0 px-2.5 py-1 rounded-md border ${badgeClass}`}
                     >
                       {dept.teachers}
-                    </dd>
-                  </div>
+                    </span>
+                  </button>
                 );
               })}
-            </dl>
+            </div>
 
             <div className="px-6 py-3.5 bg-[#0F3828] text-white flex items-center justify-between text-xs font-semibold">
               <span>Total Campus Instructional Faculty</span>
@@ -501,7 +704,7 @@ export function EnrollmentDashboard({
           </div>
         </div>
 
-        {/* Grade-by-Grade Data Table */}
+        {/* Grade-by-Grade Interactive Data Table */}
         <div className="bg-white/95 backdrop-blur-xs rounded-xl border border-[#D2DFD7] overflow-hidden shadow-xs">
           <div className="px-6 py-4 bg-gradient-to-r from-[#F3F8F5] via-white to-[#F0F7FC] border-b border-[#DCE6E0] flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -510,8 +713,8 @@ export function EnrollmentDashboard({
               </h3>
               <p className="text-xs text-[#525866]">
                 {canEdit
-                  ? 'AO-II Edit Mode active — changes sync with the school server and update school-wide totals immediately.'
-                  : 'View-only mode — only an authenticated AO-II account can edit enrollment counts and teacher assignments.'}
+                  ? 'AO-II Edit Mode active — click any column header to sort or use +/− controls to update counts.'
+                  : 'Click column headers to sort or click a row to spotlight its grade capacity above.'}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
@@ -549,32 +752,99 @@ export function EnrollmentDashboard({
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-[#0F3828] text-[11px] font-semibold text-[#E2F3EA]">
-                    <th className="py-3 px-6">Grade Level</th>
+                    <th className="py-3 px-6">
+                      <button
+                        type="button"
+                        onClick={() => setSortBy('grade')}
+                        className="inline-flex items-center gap-1 cursor-pointer hover:text-white"
+                      >
+                        <span>Grade Level</span>
+                        <ArrowDownUp className="w-3 h-3 opacity-75" />
+                      </button>
+                    </th>
                     <th className="py-3 px-4">Division</th>
                     <th className="py-3 px-4">Grade Lead</th>
-                    <th className="py-3 px-4 text-right">Sections</th>
-                    <th className="py-3 px-4 text-right">Students Enrolled</th>
-                    <th className="py-3 px-4 text-right">Capacity</th>
-                    <th className="py-3 px-4 text-right">Fill Rate</th>
-                    <th className="py-3 px-4 text-right">Teachers</th>
-                    <th className="py-3 px-6 text-right">Ratio</th>
+                    <th className="py-3 px-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setSortBy('sections')}
+                        className="inline-flex items-center gap-1 cursor-pointer hover:text-white"
+                      >
+                        <span>Sections</span>
+                        <ArrowDownUp className="w-3 h-3 opacity-75" />
+                      </button>
+                    </th>
+                    <th className="py-3 px-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setSortBy('enrollment')}
+                        className="inline-flex items-center gap-1 cursor-pointer hover:text-white"
+                      >
+                        <span>Students Enrolled</span>
+                        <ArrowDownUp className="w-3 h-3 opacity-75" />
+                      </button>
+                    </th>
+                    <th className="py-3 px-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setSortBy('capacity')}
+                        className="inline-flex items-center gap-1 cursor-pointer hover:text-white"
+                      >
+                        <span>Capacity</span>
+                        <ArrowDownUp className="w-3 h-3 opacity-75" />
+                      </button>
+                    </th>
+                    <th className="py-3 px-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setSortBy('fillRate')}
+                        className="inline-flex items-center gap-1 cursor-pointer hover:text-white"
+                      >
+                        <span>Fill Rate</span>
+                        <ArrowDownUp className="w-3 h-3 opacity-75" />
+                      </button>
+                    </th>
+                    <th className="py-3 px-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setSortBy('teachers')}
+                        className="inline-flex items-center gap-1 cursor-pointer hover:text-white"
+                      >
+                        <span>Teachers</span>
+                        <ArrowDownUp className="w-3 h-3 opacity-75" />
+                      </button>
+                    </th>
+                    <th className="py-3 px-6 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setSortBy('ratio')}
+                        className="inline-flex items-center gap-1 cursor-pointer hover:text-white"
+                      >
+                        <span>Ratio</span>
+                        <ArrowDownUp className="w-3 h-3 opacity-75" />
+                      </button>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E4ECE7] text-xs">
                   {filteredRows.map((row) => {
                     const fillRate = Math.round((row.enrolledStudents / row.capacity) * 100);
                     const ratio = (row.enrolledStudents / row.teachers).toFixed(1);
-                    const isRowHighlighted = hoveredGradeId === row.id;
+                    const isRowHighlighted =
+                      hoveredGradeId === row.id || selectedGradeId === row.id;
                     const isPrimary = row.division === 'Primary (K–3)';
                     const isNearFull = fillRate >= 95;
 
                     return (
                       <tr
                         key={row.id}
+                        onClick={() =>
+                          setSelectedGradeId((prev) => (prev === row.id ? null : row.id))
+                        }
                         onMouseEnter={() => setHoveredGradeId(row.id)}
                         onMouseLeave={() => setHoveredGradeId(null)}
-                        className={`transition-colors ${
-                          isRowHighlighted ? 'bg-[#ECFDF5]/80' : 'hover:bg-[#F5F9F7]'
+                        className={`transition-colors cursor-pointer ${
+                          isRowHighlighted ? 'bg-[#ECFDF5]/85' : 'hover:bg-[#F5F9F7]'
                         }`}
                       >
                         <td className="py-3.5 px-6 font-semibold text-[#111315] whitespace-nowrap">
@@ -593,7 +863,12 @@ export function EnrollmentDashboard({
                         <td className="py-3.5 px-4 text-right font-mono tabular-nums text-[#475569]">
                           {row.sections}
                         </td>
-                        <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                        <td
+                          className="py-3.5 px-4 text-right whitespace-nowrap"
+                          onClick={(e) => {
+                            if (canEdit) e.stopPropagation();
+                          }}
+                        >
                           {canEdit ? (
                             <div className="inline-flex items-center justify-end gap-2">
                               <button
@@ -644,7 +919,12 @@ export function EnrollmentDashboard({
                             </span>
                           </div>
                         </td>
-                        <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                        <td
+                          className="py-3.5 px-4 text-right whitespace-nowrap"
+                          onClick={(e) => {
+                            if (canEdit) e.stopPropagation();
+                          }}
+                        >
                           {canEdit ? (
                             <div className="inline-flex items-center justify-end gap-2">
                               <button
@@ -692,6 +972,50 @@ export function EnrollmentDashboard({
             </div>
           )}
         </div>
+
+        {/* Live Database-Synced School Faculty & Staff Directory */}
+        {staffRecords.length > 0 && (
+          <div className="bg-white/95 backdrop-blur-xs rounded-xl border border-[#D2DFD7] overflow-hidden shadow-xs">
+            <div className="px-6 py-4 bg-gradient-to-r from-[#ECFDF5]/90 via-white to-[#EFF6FF]/90 border-b border-[#DCE6E0] flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-display text-lg font-semibold text-[#111315]">
+                  Active Faculty &amp; Staff Directory
+                </h3>
+                <p className="text-xs text-[#525866]">
+                  Live personnel roster synced directly from the AO-II School Database.
+                </p>
+              </div>
+              <span className="font-mono text-xs font-semibold tabular-nums text-[#0B291E]">
+                {staffRecords.filter((s) => s.role === 'Teacher').length} Teachers ·{' '}
+                {staffRecords.length} Total Personnel
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-5">
+              {staffRecords.map((staff) => (
+                <div
+                  key={staff.id}
+                  className="rounded-xl border border-[#E2EAE5] bg-[#F9FBFA] p-4 flex flex-col justify-between gap-2.5"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="font-semibold text-[#15803D]">{staff.role}</span>
+                      <span className="text-[#525866]">{staff.employmentStatus}</span>
+                    </div>
+                    <div className="text-sm font-semibold text-[#111315]">{staff.fullName}</div>
+                    <div className="text-xs text-[#525866]">{staff.title}</div>
+                  </div>
+                  <div className="pt-2 border-t border-[#E2EAE5] text-[11px] text-[#525866] space-y-0.5">
+                    <div className="font-medium text-[#111315]">{staff.assignedGradeLabel}</div>
+                    <div>
+                      {staff.department} · {staff.room}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );

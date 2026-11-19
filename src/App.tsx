@@ -6,6 +6,8 @@ import { DispatchModal } from './components/DispatchModal';
 import { EnrollmentDashboard } from './components/EnrollmentDashboard';
 import { FacilityLightbox } from './components/FacilityLightbox';
 import { AppPage, Header } from './components/Header';
+import { HomeCommunityFeed } from './components/HomeCommunityFeed';
+import { InventoryDashboardPage } from './components/InventoryDashboardPage';
 import {
   PortalWorkspace,
   RoleWorkspace,
@@ -17,6 +19,7 @@ import { SchoolCalendar } from './components/SchoolCalendar';
 import {
   ACADEMIC_PROGRAMS,
   AcademicYear,
+  AttendanceStatus,
   CAMPUS_FACILITIES,
   CampusFacility,
   FacilityCategory,
@@ -26,21 +29,45 @@ import {
   SCHOOL_CALENDAR_EVENTS,
   SCHOOL_DISPATCHES,
   SchoolDispatch,
+  TEACHER_PORTAL_PROFILES,
 } from './data/schoolData';
 import {
+  ActivityPostCategory,
+  ActivityPostItem,
   AdminAuditEntry,
   AdmissionsSubmission,
+  Ao2AccountSummary,
+  Ao2RequisitionStatus,
   DatabaseOverview,
   DatabaseRecordCollection,
+  HomeFeedPost,
+  HomePostCategory,
   InventoryItem,
+  LeaveApplication,
+  LeaveType,
+  MaterialRequisition,
+  MaterialRequisitionCategory,
   PrincipalDocumentStatus,
+  PrincipalRequisitionStatus,
+  RequisitionUrgency,
   SchoolSystemBootstrap,
   SiteBackendConfig,
   SiteFrontendConfig,
   StaffAccountSummary,
+  StaffMemberRecord,
+  StudentDocFeedbackEntry,
+  StudentRecord,
   TeacherAccountSummary,
+  TeacherAdvisoryNote,
   UploadedCourseDocument,
 } from './types/schoolConfig';
+import {
+  enqueuePendingDbWrite,
+  flushPendingDbWrites,
+  loadBootstrapCache,
+  loadPendingDbWrites,
+  saveBootstrapCache,
+} from './utils/offlineDbCache';
 
 function parseRouteFromWindow(): { page: AppPage; role: RoleWorkspace } {
   const path = window.location.pathname;
@@ -54,6 +81,8 @@ function parseRouteFromWindow(): { page: AppPage; role: RoleWorkspace } {
     ? 'academics'
     : /^\/enrollment\/?$/i.test(path)
     ? 'enrollment'
+    : /^\/inventory\/?$/i.test(path)
+    ? 'inventory'
     : 'home';
   return { page, role };
 }
@@ -101,6 +130,7 @@ export default function App() {
   const initialRoute = useMemo(() => parseRouteFromWindow(), []);
   const [currentPage, setCurrentPage] = useState<AppPage>(initialRoute.page);
   const [portalInitialRole, setPortalInitialRole] = useState<RoleWorkspace>(initialRoute.role);
+  const [inventoryReturnRole, setInventoryReturnRole] = useState<'ao2' | 'principal'>('ao2');
 
   const [frontendConfig, setFrontendConfig] =
     useState<SiteFrontendConfig>(DEFAULT_FRONTEND_CONFIG);
@@ -112,10 +142,20 @@ export default function App() {
   const [uploadedDocuments, setUploadedDocuments] = useState<UploadedCourseDocument[]>([]);
   const [admissionsSubmissions, setAdmissionsSubmissions] = useState<AdmissionsSubmission[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [materialRequisitions, setMaterialRequisitions] = useState<MaterialRequisition[]>([]);
+  const [leaveApplications, setLeaveApplications] = useState<LeaveApplication[]>([]);
+  const [staffRecords, setStaffRecords] = useState<StaffMemberRecord[]>([]);
+  const [studentRecords, setStudentRecords] = useState<StudentRecord[]>([]);
+  const [activityPosts, setActivityPosts] = useState<ActivityPostItem[]>([]);
+  const [homePosts, setHomePosts] = useState<HomeFeedPost[]>([]);
+  const [teacherNotes, setTeacherNotes] = useState<TeacherAdvisoryNote[]>([]);
+  const [studentDocFeedback, setStudentDocFeedback] = useState<StudentDocFeedbackEntry[]>([]);
   const [auditLog, setAuditLog] = useState<AdminAuditEntry[]>([]);
   const [teacherAccounts, setTeacherAccounts] = useState<TeacherAccountSummary[]>([]);
   const [principalAccount, setPrincipalAccount] = useState<StaffAccountSummary | null>(null);
   const [ao2Account, setAo2Account] = useState<StaffAccountSummary | null>(null);
+  const [ao2Accounts, setAo2Accounts] = useState<Ao2AccountSummary[]>([]);
+  const [hasHydratedStore, setHasHydratedStore] = useState(false);
   const [teacherSession, setTeacherSession] = useState<TeacherAuthSession | null>(null);
   const [principalSession, setPrincipalSession] = useState<StaffAuthSession | null>(null);
   const [ao2Session, setAo2Session] = useState<StaffAuthSession | null>(null);
@@ -136,31 +176,116 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
+  const hydrateBootstrapState = (data: SchoolSystemBootstrap) => {
+    setFrontendConfig(data.frontendConfig);
+    setBackendConfig(data.backendConfig);
+    setEnrollmentByYear(data.enrollmentByYear);
+    setUploadedDocuments(data.uploadedDocuments);
+    setAdmissionsSubmissions(data.admissionsSubmissions);
+    setInventoryItems(data.inventoryItems ?? []);
+    setMaterialRequisitions(data.materialRequisitions ?? []);
+    setLeaveApplications(data.leaveApplications ?? []);
+    setStaffRecords(data.staffRecords ?? []);
+    setStudentRecords(data.studentRecords ?? []);
+    setActivityPosts(data.activityPosts ?? []);
+    setHomePosts(data.homePosts ?? []);
+    setTeacherNotes(data.teacherNotes ?? []);
+    setStudentDocFeedback(data.studentDocFeedback ?? []);
+    setAuditLog(data.auditLog);
+    setTeacherAccounts(data.teacherAccounts ?? []);
+    setPrincipalAccount(data.principalAccount ?? null);
+    setAo2Account(data.ao2Account ?? null);
+    setAo2Accounts(data.ao2Accounts ?? []);
+    setHasHydratedStore(true);
+  };
+
   useEffect(() => {
     let active = true;
-    fetch('/api/bootstrap')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: SchoolSystemBootstrap | null) => {
+    const cached = loadBootstrapCache();
+    if (cached) {
+      hydrateBootstrapState(cached);
+    }
+
+    const syncFromServer = async () => {
+      if (loadPendingDbWrites().length > 0) {
+        await flushPendingDbWrites().catch(() => {});
+      }
+      try {
+        const res = await fetch('/api/bootstrap');
+        if (!res.ok) return;
+        const data = (await res.json()) as SchoolSystemBootstrap;
         if (!active || !data) return;
-        setFrontendConfig(data.frontendConfig);
-        setBackendConfig(data.backendConfig);
-        setEnrollmentByYear(data.enrollmentByYear);
-        setUploadedDocuments(data.uploadedDocuments);
-        setAdmissionsSubmissions(data.admissionsSubmissions);
-        setInventoryItems(data.inventoryItems ?? []);
-        setAuditLog(data.auditLog);
-        setTeacherAccounts(data.teacherAccounts ?? []);
-        setPrincipalAccount(data.principalAccount ?? null);
-        setAo2Account(data.ao2Account ?? null);
-      })
-      .catch(() => {
-        // Retain clean initial state if API is unreachable
-      });
+        hydrateBootstrapState(data);
+        saveBootstrapCache(data);
+      } catch {
+        // Retain cached database snapshot while server or network is offline
+      }
+    };
+
+    void syncFromServer();
+
+    const handleOnline = () => {
+      void syncFromServer();
+    };
+    window.addEventListener('online', handleOnline);
+    const interval = window.setInterval(() => {
+      if (loadPendingDbWrites().length > 0) {
+        void syncFromServer();
+      }
+    }, 15000);
 
     return () => {
       active = false;
+      window.removeEventListener('online', handleOnline);
+      window.clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    if (!hasHydratedStore || !ao2Account) return;
+    saveBootstrapCache({
+      frontendConfig,
+      backendConfig,
+      enrollmentByYear,
+      uploadedDocuments,
+      admissionsSubmissions,
+      inventoryItems,
+      materialRequisitions,
+      leaveApplications,
+      staffRecords,
+      studentRecords,
+      activityPosts,
+      homePosts,
+      teacherNotes,
+      studentDocFeedback,
+      auditLog,
+      teacherAccounts,
+      principalAccount,
+      ao2Account,
+      ao2Accounts,
+    });
+  }, [
+    hasHydratedStore,
+    frontendConfig,
+    backendConfig,
+    enrollmentByYear,
+    uploadedDocuments,
+    admissionsSubmissions,
+    inventoryItems,
+    materialRequisitions,
+    leaveApplications,
+    staffRecords,
+    studentRecords,
+    activityPosts,
+    homePosts,
+    teacherNotes,
+    studentDocFeedback,
+    auditLog,
+    teacherAccounts,
+    principalAccount,
+    ao2Account,
+    ao2Accounts,
+  ]);
 
   const navigateToPage = (page: AppPage, hash?: string, role?: RoleWorkspace) => {
     if (page === 'portal') {
@@ -183,6 +308,13 @@ export default function App() {
     if (page === 'enrollment') {
       setCurrentPage('enrollment');
       window.history.pushState(null, '', '/enrollment');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (page === 'inventory') {
+      setCurrentPage('inventory');
+      window.history.pushState(null, '', '/inventory');
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
@@ -452,7 +584,9 @@ export default function App() {
       return { ok: false, error: data.error || 'AO-II authentication failed.' };
     }
     setAo2Session({
+      accountId: data.accountId,
       username: data.username,
+      fullName: data.fullName,
       token: data.token,
     });
     return { ok: true };
@@ -468,10 +602,44 @@ export default function App() {
     setAo2Session(null);
   };
 
+  const handleAo2CreateTeacherAccount = async (payload: {
+    fullName: string;
+    title: string;
+    department: string;
+    assignedGradeId: string;
+    assignedGradeLabel: string;
+    email: string;
+    phone?: string;
+    room: string;
+    officeHours?: string;
+    employmentStatus?: StaffMemberRecord['employmentStatus'];
+    username: string;
+    newPassword: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch('/api/admin/teacher-accounts', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not create teacher portal account.' };
+    }
+    if (data.teacherAccounts) setTeacherAccounts(data.teacherAccounts);
+    if (data.staffRecords) setStaffRecords(data.staffRecords);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
   const handleAo2UpdateTeacherAccount = async (
     teacherId: string,
     username: string,
-    newPassword?: string
+    newPassword?: string,
+    profilePatch?: Partial<Omit<StaffMemberRecord, 'id' | 'updatedAt'>>
   ): Promise<{ ok: boolean; error?: string }> => {
     const res = await fetch(`/api/admin/teacher-accounts/${encodeURIComponent(teacherId)}`, {
       method: 'PATCH',
@@ -480,23 +648,58 @@ export default function App() {
         'x-admin-role': 'AO-II',
         'x-ao2-token': ao2Session?.token ?? '',
       },
-      body: JSON.stringify({ username, newPassword }),
+      body: JSON.stringify({ username, newPassword, ...profilePatch }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       return { ok: false, error: data.error || 'Could not update teacher account.' };
     }
-    setTeacherAccounts(data.teacherAccounts);
-    setAuditLog(data.auditLog);
+    if (data.teacherAccounts) setTeacherAccounts(data.teacherAccounts);
+    if (data.staffRecords) setStaffRecords(data.staffRecords);
+    if (data.studentRecords) setStudentRecords(data.studentRecords);
+    if (data.materialRequisitions) setMaterialRequisitions(data.materialRequisitions);
+    if (data.auditLog) setAuditLog(data.auditLog);
     if (teacherSession && teacherSession.teacherId === teacherId) {
       setTeacherSession((prev) => (prev ? { ...prev, username } : null));
     }
     return { ok: true };
   };
 
+  const handleAo2DeleteTeacherAccount = async (
+    teacherId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch(`/api/admin/teacher-accounts/${encodeURIComponent(teacherId)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not delete teacher portal account.' };
+    }
+    if (data.teacherAccounts) setTeacherAccounts(data.teacherAccounts);
+    if (data.staffRecords) setStaffRecords(data.staffRecords);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    if (teacherSession && teacherSession.teacherId === teacherId) {
+      setTeacherSession(null);
+    }
+    return { ok: true };
+  };
+
   const handleAo2UpdatePrincipalAccount = async (
     username: string,
-    newPassword?: string
+    newPassword?: string,
+    profilePatch?: {
+      fullName?: string;
+      title?: string;
+      department?: string;
+      email?: string;
+      phone?: string;
+      room?: string;
+      officeHours?: string;
+    }
   ): Promise<{ ok: boolean; error?: string }> => {
     const res = await fetch('/api/admin/principal-account', {
       method: 'PATCH',
@@ -505,14 +708,15 @@ export default function App() {
         'x-admin-role': 'AO-II',
         'x-ao2-token': ao2Session?.token ?? '',
       },
-      body: JSON.stringify({ username, newPassword }),
+      body: JSON.stringify({ username, newPassword, ...profilePatch }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       return { ok: false, error: data.error || 'Could not update Principal account.' };
     }
     setPrincipalAccount(data.principalAccount ?? null);
-    setAuditLog(data.auditLog);
+    if (data.staffRecords) setStaffRecords(data.staffRecords);
+    if (data.auditLog) setAuditLog(data.auditLog);
     if (principalSession) {
       setPrincipalSession((prev) =>
         prev ? { ...prev, username: data.principalAccount?.username ?? username } : null
@@ -521,9 +725,72 @@ export default function App() {
     return { ok: true };
   };
 
+  const handleAo2CreatePrincipalAccount = async (payload: {
+    fullName: string;
+    title: string;
+    department: string;
+    email: string;
+    phone?: string;
+    room: string;
+    officeHours?: string;
+    employmentStatus?: StaffMemberRecord['employmentStatus'];
+    username: string;
+    newPassword: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch('/api/admin/principal-account', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not create Principal account.' };
+    }
+    setPrincipalAccount(data.principalAccount ?? null);
+    if (data.staffRecords) setStaffRecords(data.staffRecords);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleAo2DeletePrincipalAccount = async (): Promise<{
+    ok: boolean;
+    error?: string;
+  }> => {
+    const res = await fetch('/api/admin/principal-account', {
+      method: 'DELETE',
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not delete Principal account.' };
+    }
+    setPrincipalAccount(null);
+    setPrincipalSession(null);
+    if (data.staffRecords) setStaffRecords(data.staffRecords);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
   const handleAo2UpdateOwnAccount = async (
     username: string,
-    newPassword?: string
+    newPassword?: string,
+    profilePatch?: {
+      accountId?: string;
+      fullName?: string;
+      title?: string;
+      department?: string;
+      email?: string;
+      phone?: string;
+      room?: string;
+      officeHours?: string;
+    }
   ): Promise<{ ok: boolean; error?: string }> => {
     const res = await fetch('/api/admin/ao2-account', {
       method: 'PATCH',
@@ -532,18 +799,112 @@ export default function App() {
         'x-admin-role': 'AO-II',
         'x-ao2-token': ao2Session?.token ?? '',
       },
-      body: JSON.stringify({ username, newPassword }),
+      body: JSON.stringify({ username, newPassword, ...profilePatch }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       return { ok: false, error: data.error || 'Could not update AO-II administrator account.' };
     }
-    setAo2Account(data.ao2Account ?? null);
-    setAuditLog(data.auditLog);
-    if (ao2Session) {
+    if (data.ao2Account) setAo2Account(data.ao2Account);
+    if (data.ao2Accounts) setAo2Accounts(data.ao2Accounts);
+    if (data.staffRecords) setStaffRecords(data.staffRecords);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    const editedId =
+      profilePatch?.accountId ?? ao2Session?.accountId ?? ao2Accounts[0]?.accountId ?? '';
+    if (ao2Session && (ao2Session.accountId === editedId || !ao2Session.accountId)) {
       setAo2Session((prev) =>
-        prev ? { ...prev, username: data.ao2Account?.username ?? username } : null
+        prev
+          ? {
+              ...prev,
+              username: username || prev.username,
+              fullName: profilePatch?.fullName ?? prev.fullName,
+            }
+          : null
       );
+    }
+    return { ok: true };
+  };
+
+  const handleAo2CreateAdminAccount = async (payload: {
+    fullName: string;
+    title: string;
+    department: string;
+    email: string;
+    phone?: string;
+    room: string;
+    officeHours?: string;
+    employmentStatus?: StaffMemberRecord['employmentStatus'];
+    username: string;
+    newPassword: string;
+    setAsPrimary?: boolean;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch('/api/admin/ao2-accounts', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not create AO-II administrator account.' };
+    }
+    if (data.ao2Account) setAo2Account(data.ao2Account);
+    if (data.ao2Accounts) setAo2Accounts(data.ao2Accounts);
+    if (data.staffRecords) setStaffRecords(data.staffRecords);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleAo2SetPrimaryAdminAccount = async (
+    accountId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch(
+      `/api/admin/ao2-accounts/${encodeURIComponent(accountId)}/set-primary`,
+      {
+        method: 'POST',
+        headers: {
+          'x-admin-role': 'AO-II',
+          'x-ao2-token': ao2Session?.token ?? '',
+        },
+      }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: data.error || 'Could not set primary AO-II administrator account.',
+      };
+    }
+    if (data.ao2Account) setAo2Account(data.ao2Account);
+    if (data.ao2Accounts) setAo2Accounts(data.ao2Accounts);
+    if (data.staffRecords) setStaffRecords(data.staffRecords);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleAo2DeleteAdminAccount = async (
+    accountId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch(`/api/admin/ao2-accounts/${encodeURIComponent(accountId)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not delete AO-II administrator account.' };
+    }
+    if (data.ao2Account) setAo2Account(data.ao2Account);
+    if (data.ao2Accounts) setAo2Accounts(data.ao2Accounts);
+    if (data.staffRecords) setStaffRecords(data.staffRecords);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    if (ao2Session && ao2Session.accountId === accountId) {
+      setAo2Session(null);
     }
     return { ok: true };
   };
@@ -597,13 +958,18 @@ export default function App() {
   };
 
   const handleDeleteUploadedDocument = async (docId: string) => {
+    if (!ao2Session) return;
     const res = await fetch(`/api/teacher-documents/${encodeURIComponent(docId)}`, {
       method: 'DELETE',
-      headers: { 'x-teacher-token': teacherSession?.token ?? '' },
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session.token,
+      },
     });
     if (res.ok) {
       const data = await res.json();
       setUploadedDocuments(data.uploadedDocuments);
+      if (data.auditLog) setAuditLog(data.auditLog);
     }
   };
 
@@ -650,16 +1016,26 @@ export default function App() {
     }
   };
 
+  const buildInventoryAuthHeaders = (includeJsonContentType = false): Record<string, string> => {
+    const headers: Record<string, string> = {};
+    if (includeJsonContentType) {
+      headers['Content-Type'] = 'application/json';
+    }
+    if (ao2Session?.token) {
+      headers['x-admin-role'] = 'AO-II';
+      headers['x-ao2-token'] = ao2Session.token;
+    } else if (principalSession?.token) {
+      headers['x-principal-token'] = principalSession.token;
+    }
+    return headers;
+  };
+
   const handleAo2AddInventoryItem = async (
     payload: Omit<InventoryItem, 'id'>
   ): Promise<{ ok: boolean; error?: string }> => {
     const res = await fetch('/api/admin/inventory', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-admin-role': 'AO-II',
-        'x-ao2-token': ao2Session?.token ?? '',
-      },
+      headers: buildInventoryAuthHeaders(true),
       body: JSON.stringify(payload),
     });
     const data = await res.json().catch(() => ({}));
@@ -677,11 +1053,7 @@ export default function App() {
   ): Promise<{ ok: boolean; error?: string }> => {
     const res = await fetch(`/api/admin/inventory/${encodeURIComponent(id)}`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-admin-role': 'AO-II',
-        'x-ao2-token': ao2Session?.token ?? '',
-      },
+      headers: buildInventoryAuthHeaders(true),
       body: JSON.stringify(patch),
     });
     const data = await res.json().catch(() => ({}));
@@ -698,10 +1070,7 @@ export default function App() {
   ): Promise<{ ok: boolean; error?: string }> => {
     const res = await fetch(`/api/admin/inventory/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      headers: {
-        'x-admin-role': 'AO-II',
-        'x-ao2-token': ao2Session?.token ?? '',
-      },
+      headers: buildInventoryAuthHeaders(false),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -719,10 +1088,892 @@ export default function App() {
     setUploadedDocuments(data.uploadedDocuments);
     setAdmissionsSubmissions(data.admissionsSubmissions);
     setInventoryItems(data.inventoryItems ?? []);
+    setMaterialRequisitions(data.materialRequisitions ?? []);
+    setLeaveApplications(data.leaveApplications ?? []);
+    setStaffRecords(data.staffRecords ?? []);
+    setStudentRecords(data.studentRecords ?? []);
+    setActivityPosts(data.activityPosts ?? []);
+    setHomePosts(data.homePosts ?? []);
+    setTeacherNotes(data.teacherNotes ?? []);
+    setStudentDocFeedback(data.studentDocFeedback ?? []);
     setAuditLog(data.auditLog);
-    setTeacherAccounts(data.teacherAccounts ?? []);
+    const nextTeacherAccounts = data.teacherAccounts ?? [];
+    setTeacherAccounts(nextTeacherAccounts);
     setPrincipalAccount(data.principalAccount ?? null);
     setAo2Account(data.ao2Account ?? null);
+    setAo2Accounts(data.ao2Accounts ?? []);
+    saveBootstrapCache(data);
+    if (!data.principalAccount) {
+      setPrincipalSession(null);
+    }
+    if (
+      teacherSession &&
+      !nextTeacherAccounts.some((acc) => acc.teacherId === teacherSession.teacherId)
+    ) {
+      setTeacherSession(null);
+    }
+    if (
+      ao2Session?.accountId &&
+      data.ao2Accounts &&
+      !data.ao2Accounts.some((acc) => acc.accountId === ao2Session.accountId)
+    ) {
+      setAo2Session(null);
+    }
+  };
+
+  const handleTeacherCreateRequisition = async (payload: {
+    itemName: string;
+    category: MaterialRequisitionCategory;
+    quantity: number;
+    unit: string;
+    urgency: RequisitionUrgency;
+    neededBy?: string;
+    purpose: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch('/api/teacher/requisitions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-teacher-token': teacherSession?.token ?? '',
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Could not submit material requisition.' };
+      }
+      setMaterialRequisitions(data.materialRequisitions ?? []);
+      if (data.auditLog) setAuditLog(data.auditLog);
+      return { ok: true };
+    } catch {
+      if (!teacherSession) {
+        return { ok: false, error: 'Sign in with a Teacher account to submit a requisition.' };
+      }
+      const staffMatch = staffRecords.find((s) => s.id === teacherSession.teacherId);
+      const profileMatch = TEACHER_PORTAL_PROFILES.find((t) => t.id === teacherSession.teacherId);
+      const localReq: MaterialRequisition = {
+        id: `req-offline-${Date.now()}`,
+        teacherId: teacherSession.teacherId,
+        teacherName: staffMatch?.fullName ?? profileMatch?.name ?? teacherSession.username,
+        teacherGradeSection:
+          staffMatch?.assignedGradeLabel ?? profileMatch?.assignedGradeLabel ?? 'Faculty Class',
+        itemName: payload.itemName,
+        category: payload.category,
+        quantity: payload.quantity,
+        unit: payload.unit,
+        urgency: payload.urgency,
+        neededBy: payload.neededBy,
+        purpose: payload.purpose,
+        submittedAt: 'Saved offline · pending sync',
+        ao2Status: 'Pending Review',
+      };
+      setMaterialRequisitions((prev) => [localReq, ...prev]);
+      enqueuePendingDbWrite({
+        url: '/api/teacher/requisitions',
+        method: 'POST',
+        headers: { 'x-teacher-token': teacherSession.token },
+        body: payload,
+      });
+      return { ok: true };
+    }
+  };
+
+  const handleTeacherDeleteRequisition = async (
+    id: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!ao2Session) {
+      return {
+        ok: false,
+        error: 'Only an AO-II Administrator account can remove material requisitions.',
+      };
+    }
+    const res = await fetch(`/api/teacher/requisitions/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session.token,
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not remove material requisition.' };
+    }
+    setMaterialRequisitions(data.materialRequisitions ?? []);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleAo2ReviewRequisition = async (
+    id: string,
+    payload: { ao2Status?: Ao2RequisitionStatus; ao2Note?: string }
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch(`/api/admin/requisitions/${encodeURIComponent(id)}/ao2-review`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not save AO-II requisition review.' };
+    }
+    setMaterialRequisitions(data.materialRequisitions ?? []);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handlePrincipalReviewRequisition = async (
+    id: string,
+    payload: { principalStatus?: PrincipalRequisitionStatus; principalNote?: string }
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch(`/api/principal/requisitions/${encodeURIComponent(id)}/review`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-principal-token': principalSession?.token ?? '',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not save Principal requisition review.' };
+    }
+    setMaterialRequisitions(data.materialRequisitions ?? []);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleSubmitLeaveApplication = async (
+    actorRole: 'Teacher' | 'Principal' | 'AO-II',
+    payload: {
+      leaveType: LeaveType;
+      startDate: string;
+      endDate: string;
+      numberOfDays: number;
+      reason: string;
+      contactDuringLeave?: string;
+      coveringStaff?: string;
+    }
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const authHeaders: Record<string, string> = {};
+    let applicantAccountId = '';
+    let applicantName = '';
+    let applicantUsername = '';
+    let applicantDepartmentOrGrade = '';
+
+    if (actorRole === 'Teacher') {
+      if (!teacherSession) {
+        return { ok: false, error: 'Sign in with a Teacher account to submit a leave application.' };
+      }
+      authHeaders['x-teacher-token'] = teacherSession.token;
+      const staffMatch = staffRecords.find((s) => s.id === teacherSession.teacherId);
+      const profileMatch = TEACHER_PORTAL_PROFILES.find((t) => t.id === teacherSession.teacherId);
+      applicantAccountId = teacherSession.teacherId;
+      applicantName = staffMatch?.fullName ?? profileMatch?.name ?? teacherSession.username;
+      applicantUsername = teacherSession.username;
+      applicantDepartmentOrGrade =
+        staffMatch?.assignedGradeLabel ?? profileMatch?.assignedGradeLabel ?? 'Danlog Elementary Faculty';
+    } else if (actorRole === 'Principal') {
+      if (!principalSession) {
+        return { ok: false, error: 'Sign in with the Principal account to submit a leave application.' };
+      }
+      authHeaders['x-principal-token'] = principalSession.token;
+      const principalStaff = staffRecords.find((s) => s.role === 'Principal');
+      applicantAccountId = principalStaff?.id ?? 'staff-principal';
+      applicantName = principalStaff?.fullName ?? 'School Principal';
+      applicantUsername = principalSession.username;
+      applicantDepartmentOrGrade =
+        principalStaff?.department ?? 'Office of the School Principal';
+    } else {
+      if (!ao2Session) {
+        return { ok: false, error: 'Sign in with an AO-II account to submit a leave application.' };
+      }
+      authHeaders['x-ao2-token'] = ao2Session.token;
+      const ao2Staff = staffRecords.find((s) => s.id === ao2Session.accountId);
+      applicantAccountId = ao2Session.accountId ?? ao2Staff?.id ?? 'staff-danlog-gabrito';
+      applicantName = ao2Staff?.fullName ?? ao2Session.fullName ?? 'AO-II Administrator';
+      applicantUsername = ao2Session.username;
+      applicantDepartmentOrGrade =
+        ao2Staff?.department ?? 'Administrative & Finance Office';
+    }
+
+    try {
+      const res = await fetch('/api/leave-applications', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Could not submit leave application.' };
+      }
+      setLeaveApplications(data.leaveApplications ?? []);
+      if (data.auditLog) setAuditLog(data.auditLog);
+      return { ok: true };
+    } catch {
+      const localEntry: LeaveApplication = {
+        id: `leave-offline-${Date.now()}`,
+        applicantAccountId,
+        applicantRole: actorRole,
+        applicantName,
+        applicantUsername,
+        applicantDepartmentOrGrade,
+        leaveType: payload.leaveType,
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+        numberOfDays: payload.numberOfDays,
+        reason: payload.reason,
+        contactDuringLeave: payload.contactDuringLeave,
+        coveringStaff: payload.coveringStaff,
+        submittedAt: 'Saved offline · pending sync',
+        ao2EndorsementStatus: 'Pending Endorsement',
+        principalStatus: 'Pending',
+      };
+      setLeaveApplications((prev) => [localEntry, ...prev]);
+      enqueuePendingDbWrite({
+        url: '/api/leave-applications',
+        method: 'POST',
+        headers: authHeaders,
+        body: payload,
+      });
+      return { ok: true };
+    }
+  };
+
+  const handlePrincipalDecideLeave = async (
+    id: string,
+    payload: { principalStatus: 'Approved' | 'Disapproved'; principalNote?: string }
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!principalSession) {
+      return { ok: false, error: 'Sign in with the Principal account to decide leave applications.' };
+    }
+    try {
+      const res = await fetch(`/api/principal/leave-applications/${encodeURIComponent(id)}/decision`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-principal-token': principalSession.token,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Could not record Principal decision.' };
+      }
+      setLeaveApplications(data.leaveApplications ?? []);
+      if (data.auditLog) setAuditLog(data.auditLog);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Unable to reach server while saving Principal decision.' };
+    }
+  };
+
+  const handleAo2EditLeaveApplication = async (
+    id: string,
+    payload: {
+      leaveType: LeaveType;
+      startDate: string;
+      endDate: string;
+      numberOfDays: number;
+      reason: string;
+      contactDuringLeave?: string;
+      coveringStaff?: string;
+      ao2EditNote?: string;
+    }
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!ao2Session) {
+      return { ok: false, error: 'Sign in with an AO-II Administrator account to edit leave entries.' };
+    }
+    try {
+      const res = await fetch(`/api/admin/leave-applications/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-role': 'AO-II',
+          'x-ao2-token': ao2Session.token,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Could not update leave application entry.' };
+      }
+      setLeaveApplications(data.leaveApplications ?? []);
+      if (data.auditLog) setAuditLog(data.auditLog);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Unable to reach server while updating leave entry.' };
+    }
+  };
+
+  const handleAo2DeleteLeaveApplication = async (
+    id: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!ao2Session) {
+      return { ok: false, error: 'Only an AO-II Administrator account can delete leave applications.' };
+    }
+    const res = await fetch(`/api/admin/leave-applications/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session.token,
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not remove leave application.' };
+    }
+    setLeaveApplications(data.leaveApplications ?? []);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleAo2EndorseLeaveApplication = async (
+    id: string,
+    endorsementStatus: 'Endorsed' | 'Pending Endorsement' = 'Endorsed'
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!ao2Session) {
+      return { ok: false, error: 'Sign in with an AO-II Administrator account to endorse leave applications.' };
+    }
+    try {
+      const res = await fetch(`/api/admin/leave-applications/${encodeURIComponent(id)}/endorse`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-role': 'AO-II',
+          'x-ao2-token': ao2Session.token,
+        },
+        body: JSON.stringify({ ao2EndorsementStatus: endorsementStatus }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Could not update leave endorsement.' };
+      }
+      setLeaveApplications(data.leaveApplications ?? []);
+      if (data.auditLog) setAuditLog(data.auditLog);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Unable to reach server while endorsing leave application.' };
+    }
+  };
+
+  const activeStaffActor = useMemo<{
+    role: 'Teacher' | 'Principal' | 'AO-II';
+    accountId: string;
+    label: string;
+    headers: Record<string, string>;
+  } | null>(() => {
+    if (ao2Session) {
+      const ao2Record = staffRecords.find(
+        (s) =>
+          s.id === ao2Session.accountId ||
+          (s.role === 'Administrative Officer' &&
+            s.portalUsername?.toLowerCase() === ao2Session.username.toLowerCase())
+      );
+      const name = ao2Record?.fullName ?? ao2Session.fullName ?? 'AO-II Administrator';
+      const headers: Record<string, string> = { 'x-ao2-token': ao2Session.token };
+      return {
+        role: 'AO-II',
+        accountId: ao2Session.accountId ?? ao2Record?.id ?? 'staff-danlog-gabrito',
+        label: `${name} (AO-II)`,
+        headers,
+      };
+    }
+    if (principalSession) {
+      const principalRecord = staffRecords.find((s) => s.role === 'Principal');
+      const name = principalRecord?.fullName ?? 'School Principal';
+      const headers: Record<string, string> = { 'x-principal-token': principalSession.token };
+      return {
+        role: 'Principal',
+        accountId: principalRecord?.id ?? 'staff-principal',
+        label: `${name} (Principal)`,
+        headers,
+      };
+    }
+    if (teacherSession) {
+      const staffMatch = staffRecords.find((s) => s.id === teacherSession.teacherId);
+      const profileMatch = TEACHER_PORTAL_PROFILES.find((t) => t.id === teacherSession.teacherId);
+      const name = staffMatch?.fullName ?? profileMatch?.name ?? teacherSession.username;
+      const headers: Record<string, string> = { 'x-teacher-token': teacherSession.token };
+      return {
+        role: 'Teacher',
+        accountId: teacherSession.teacherId,
+        label: `${name} (Teacher)`,
+        headers,
+      };
+    }
+    return null;
+  }, [ao2Session, principalSession, teacherSession, staffRecords]);
+
+  const handleCreateActivityPost = async (payload: {
+    title: string;
+    category: ActivityPostCategory;
+    dateConducted: string;
+    participants: string;
+    location: string;
+    description: string;
+    imageFile?: File | null;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    if (!activeStaffActor) {
+      return { ok: false, error: 'Sign in to any Teacher, Principal, or AO-II account to post.' };
+    }
+    const { imageFile, ...body } = payload;
+    const res = await fetch('/api/activities', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...activeStaffActor.headers,
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not publish activity post.' };
+    }
+    setActivityPosts(data.activityPosts ?? []);
+    if (data.auditLog) setAuditLog(data.auditLog);
+
+    if (imageFile && data.post?.id) {
+      const imgRes = await fetch(
+        `/api/activities/${encodeURIComponent(data.post.id)}/image`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': imageFile.type || 'image/jpeg',
+            'x-file-name': encodeURIComponent(imageFile.name),
+            ...activeStaffActor.headers,
+          },
+          body: imageFile,
+        }
+      );
+      const imgData = await imgRes.json().catch(() => ({}));
+      if (!imgRes.ok) {
+        return {
+          ok: false,
+          error: imgData.error || 'Activity saved, but image upload failed.',
+        };
+      }
+      setActivityPosts(imgData.activityPosts ?? []);
+    }
+    return { ok: true };
+  };
+
+  const handleDeleteActivityPost = async (
+    postId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!ao2Session) {
+      return {
+        ok: false,
+        error: 'Only an AO-II Administrator account can remove activity posts.',
+      };
+    }
+    const res = await fetch(`/api/activities/${encodeURIComponent(postId)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session.token,
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not delete activity post.' };
+    }
+    setActivityPosts(data.activityPosts ?? []);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleCreateHomePost = async (payload: {
+    title: string;
+    content: string;
+    category: HomePostCategory;
+    pinned?: boolean;
+    imageFile?: File | null;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    if (!activeStaffActor) {
+      return { ok: false, error: 'Sign in to any Teacher, Principal, or AO-II account to post.' };
+    }
+    const { imageFile, ...body } = payload;
+    try {
+      const res = await fetch('/api/home-posts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...activeStaffActor.headers,
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Could not publish post.' };
+      }
+      setHomePosts(data.homePosts ?? []);
+      if (data.auditLog) setAuditLog(data.auditLog);
+
+      if (imageFile && data.post?.id) {
+        const imgRes = await fetch(
+          `/api/home-posts/${encodeURIComponent(data.post.id)}/image`,
+          {
+            method: 'PUT',
+            headers: {
+              'Content-Type': imageFile.type || 'image/jpeg',
+              'x-file-name': encodeURIComponent(imageFile.name),
+              ...activeStaffActor.headers,
+            },
+            body: imageFile,
+          }
+        );
+        const imgData = await imgRes.json().catch(() => ({}));
+        if (!imgRes.ok) {
+          return {
+            ok: false,
+            error: imgData.error || 'Post saved, but photo upload failed.',
+          };
+        }
+        setHomePosts(imgData.homePosts ?? []);
+      }
+      return { ok: true };
+    } catch {
+      const localPost: HomeFeedPost = {
+        id: `hpost-offline-${Date.now()}`,
+        title: body.title || body.content.slice(0, 56),
+        content: body.content || body.title,
+        category: body.category,
+        authorRole: activeStaffActor.role,
+        authorName: activeStaffActor.label,
+        authorUsername: 'offline',
+        authorAccountId: activeStaffActor.accountId,
+        createdAt: 'Saved offline · pending sync',
+        pinned: body.pinned,
+      };
+      setHomePosts((prev) => [localPost, ...prev]);
+      enqueuePendingDbWrite({
+        url: '/api/home-posts',
+        method: 'POST',
+        headers: activeStaffActor.headers,
+        body,
+      });
+      return { ok: true };
+    }
+  };
+
+  const handleDeleteHomePost = async (
+    postId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!ao2Session) {
+      return {
+        ok: false,
+        error: 'Only an AO-II Administrator account can remove home page posts.',
+      };
+    }
+    const res = await fetch(`/api/home-posts/${encodeURIComponent(postId)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session.token,
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not delete home page post.' };
+    }
+    setHomePosts(data.homePosts ?? []);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleAo2AddStaffRecord = async (
+    payload: Omit<StaffMemberRecord, 'id' | 'updatedAt'> & {
+      createPortalLogin?: boolean;
+      initialPassword?: string;
+    }
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch('/api/admin/staff', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not add staff record.' };
+    }
+    setStaffRecords(data.staffRecords ?? []);
+    if (data.teacherAccounts) setTeacherAccounts(data.teacherAccounts);
+    if ('principalAccount' in data) setPrincipalAccount(data.principalAccount ?? null);
+    if (data.ao2Account) setAo2Account(data.ao2Account);
+    if (data.ao2Accounts) setAo2Accounts(data.ao2Accounts);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleAo2UpdateStaffRecord = async (
+    id: string,
+    patch: Partial<Omit<StaffMemberRecord, 'id' | 'updatedAt'>> & { newPassword?: string }
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch(`/api/admin/staff/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not update staff record.' };
+    }
+    setStaffRecords(data.staffRecords ?? []);
+    if (data.studentRecords) setStudentRecords(data.studentRecords);
+    if (data.materialRequisitions) setMaterialRequisitions(data.materialRequisitions);
+    if (data.teacherAccounts) setTeacherAccounts(data.teacherAccounts);
+    if ('principalAccount' in data) {
+      setPrincipalAccount(data.principalAccount ?? null);
+      if (!data.principalAccount) setPrincipalSession(null);
+    }
+    if (data.ao2Account) setAo2Account(data.ao2Account);
+    if (data.ao2Accounts) setAo2Accounts(data.ao2Accounts);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleAo2DeleteStaffRecord = async (
+    id: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch(`/api/admin/staff/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not delete staff record.' };
+    }
+    setStaffRecords(data.staffRecords ?? []);
+    if (data.teacherAccounts) setTeacherAccounts(data.teacherAccounts);
+    if ('principalAccount' in data) {
+      setPrincipalAccount(data.principalAccount ?? null);
+      if (!data.principalAccount) setPrincipalSession(null);
+    }
+    if (data.ao2Account) setAo2Account(data.ao2Account);
+    if (data.ao2Accounts) setAo2Accounts(data.ao2Accounts);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    if (teacherSession && teacherSession.teacherId === id) {
+      setTeacherSession(null);
+    }
+    if (ao2Session && ao2Session.accountId === id) {
+      setAo2Session(null);
+    }
+    return { ok: true };
+  };
+
+  const handleAo2AddStudentRecord = async (
+    payload: Omit<StudentRecord, 'id' | 'updatedAt'>
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch('/api/admin/students', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not add student record.' };
+    }
+    setStudentRecords(data.studentRecords ?? []);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleAo2UpdateStudentRecord = async (
+    id: string,
+    patch: Partial<Omit<StudentRecord, 'id' | 'updatedAt'>>
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch(`/api/admin/students/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not update student record.' };
+    }
+    setStudentRecords(data.studentRecords ?? []);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleAo2DeleteStudentRecord = async (
+    id: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch(`/api/admin/students/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not delete student record.' };
+    }
+    setStudentRecords(data.studentRecords ?? []);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleUpdateStudentAttendance = async (
+    studentId: string,
+    attendance: AttendanceStatus
+  ) => {
+    setStudentRecords((prev) =>
+      prev.map((s) => (s.id === studentId ? { ...s, attendance } : s))
+    );
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-teacher-token': teacherSession?.token ?? '',
+      'x-ao2-token': ao2Session?.token ?? '',
+    };
+    try {
+      const res = await fetch(`/api/teacher/students/${encodeURIComponent(studentId)}/attendance`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ attendance }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.studentRecords) setStudentRecords(data.studentRecords);
+      }
+    } catch {
+      enqueuePendingDbWrite({
+        url: `/api/teacher/students/${encodeURIComponent(studentId)}/attendance`,
+        method: 'PATCH',
+        headers,
+        body: { attendance },
+      });
+    }
+  };
+
+  const handleAddTeacherNote = async (
+    teacherId: string,
+    text: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const cleanText = text.trim();
+    if (cleanText.length < 3) {
+      return { ok: false, error: 'Advisory note must be at least 3 characters.' };
+    }
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-teacher-token': teacherSession?.token ?? '',
+      ...(ao2Session ? { 'x-admin-role': 'AO-II', 'x-ao2-token': ao2Session.token } : {}),
+    };
+    try {
+      const res = await fetch('/api/teacher/notes', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ teacherId, text: cleanText }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Could not save advisory note.' };
+      }
+      if (data.teacherNotes) setTeacherNotes(data.teacherNotes);
+      if (data.auditLog) setAuditLog(data.auditLog);
+      return { ok: true };
+    } catch {
+      const staffMatch = staffRecords.find((s) => s.id === teacherId);
+      const localNote: TeacherAdvisoryNote = {
+        id: `tnote-offline-${Date.now()}`,
+        teacherId,
+        authorName: staffMatch?.fullName ?? teacherSession?.username ?? 'Faculty Member',
+        text: cleanText,
+        timestamp: 'Saved offline · pending sync',
+      };
+      setTeacherNotes((prev) => [localNote, ...prev]);
+      enqueuePendingDbWrite({
+        url: '/api/teacher/notes',
+        method: 'POST',
+        headers,
+        body: { teacherId, text: cleanText },
+      });
+      return { ok: true };
+    }
+  };
+
+  const handleSaveStudentDocFeedback = async (
+    docId: string,
+    teacherId: string,
+    comment: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const cleanComment = comment.trim();
+    if (!cleanComment) {
+      return { ok: false, error: 'Enter a feedback note first.' };
+    }
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-teacher-token': teacherSession?.token ?? '',
+      ...(ao2Session ? { 'x-admin-role': 'AO-II', 'x-ao2-token': ao2Session.token } : {}),
+    };
+    try {
+      const res = await fetch('/api/teacher/student-doc-feedback', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ docId, teacherId, comment: cleanComment }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Could not save feedback note.' };
+      }
+      if (data.studentDocFeedback) setStudentDocFeedback(data.studentDocFeedback);
+      if (data.auditLog) setAuditLog(data.auditLog);
+      return { ok: true };
+    } catch {
+      const staffMatch = staffRecords.find((s) => s.id === teacherId);
+      const localFeedback: StudentDocFeedbackEntry = {
+        id: `sfb-offline-${Date.now()}`,
+        docId,
+        teacherId,
+        authorName: staffMatch?.fullName ?? teacherSession?.username ?? 'Faculty Member',
+        comment: cleanComment,
+        updatedAt: 'Saved offline · pending sync',
+      };
+      setStudentDocFeedback((prev) => {
+        const idx = prev.findIndex((f) => f.docId === docId && f.teacherId === teacherId);
+        if (idx >= 0) {
+          const copy = [...prev];
+          copy[idx] = localFeedback;
+          return copy;
+        }
+        return [localFeedback, ...prev];
+      });
+      enqueuePendingDbWrite({
+        url: '/api/teacher/student-doc-feedback',
+        method: 'POST',
+        headers,
+        body: { docId, teacherId, comment: cleanComment },
+      });
+      return { ok: true };
+    }
   };
 
   const handleAo2FetchDatabase = async (): Promise<{
@@ -878,10 +2129,19 @@ export default function App() {
             uploadedDocuments={uploadedDocuments}
             admissionsSubmissions={admissionsSubmissions}
             inventoryItems={inventoryItems}
+            materialRequisitions={materialRequisitions}
+            leaveApplications={leaveApplications}
+            staffRecords={staffRecords}
+            studentRecords={studentRecords}
+            activityPosts={activityPosts}
+            homePosts={homePosts}
+            teacherNotes={teacherNotes}
+            studentDocFeedback={studentDocFeedback}
             auditLog={auditLog}
             teacherAccounts={teacherAccounts}
             principalAccount={principalAccount}
             ao2Account={ao2Account}
+            ao2Accounts={ao2Accounts}
             teacherSession={teacherSession}
             principalSession={principalSession}
             ao2Session={ao2Session}
@@ -893,9 +2153,16 @@ export default function App() {
             onPrincipalChangePassword={handlePrincipalChangePassword}
             onAo2Login={handleAo2Login}
             onAo2Logout={handleAo2Logout}
+            onAo2CreateTeacherAccount={handleAo2CreateTeacherAccount}
             onAo2UpdateTeacherAccount={handleAo2UpdateTeacherAccount}
+            onAo2DeleteTeacherAccount={handleAo2DeleteTeacherAccount}
             onAo2UpdatePrincipalAccount={handleAo2UpdatePrincipalAccount}
+            onAo2CreatePrincipalAccount={handleAo2CreatePrincipalAccount}
+            onAo2DeletePrincipalAccount={handleAo2DeletePrincipalAccount}
             onAo2UpdateOwnAccount={handleAo2UpdateOwnAccount}
+            onAo2CreateAdminAccount={handleAo2CreateAdminAccount}
+            onAo2SetPrimaryAdminAccount={handleAo2SetPrimaryAdminAccount}
+            onAo2DeleteAdminAccount={handleAo2DeleteAdminAccount}
             onSaveFrontendConfig={handleSaveFrontendConfig}
             onSaveBackendConfig={handleSaveBackendConfig}
             onUpdateCapacity={handleUpdateCapacity}
@@ -903,15 +2170,81 @@ export default function App() {
             onDeleteUploadedDocument={handleDeleteUploadedDocument}
             onPrincipalReviewDocument={handlePrincipalReviewDocument}
             onUpdateAdmissionStatus={handleUpdateAdmissionStatus}
-            onAo2AddInventoryItem={handleAo2AddInventoryItem}
-            onAo2UpdateInventoryItem={handleAo2UpdateInventoryItem}
-            onAo2DeleteInventoryItem={handleAo2DeleteInventoryItem}
+            onAo2AddStaffRecord={handleAo2AddStaffRecord}
+            onAo2UpdateStaffRecord={handleAo2UpdateStaffRecord}
+            onAo2DeleteStaffRecord={handleAo2DeleteStaffRecord}
+            onAo2AddStudentRecord={handleAo2AddStudentRecord}
+            onAo2UpdateStudentRecord={handleAo2UpdateStudentRecord}
+            onAo2DeleteStudentRecord={handleAo2DeleteStudentRecord}
+            onUpdateStudentAttendance={handleUpdateStudentAttendance}
+            onAddTeacherNote={handleAddTeacherNote}
+            onSaveStudentDocFeedback={handleSaveStudentDocFeedback}
+            onCreateActivityPost={handleCreateActivityPost}
+            onDeleteActivityPost={handleDeleteActivityPost}
+            onCreateHomePost={handleCreateHomePost}
+            onDeleteHomePost={handleDeleteHomePost}
             onAo2FetchDatabase={handleAo2FetchDatabase}
             onAo2UpdateDbEnrollmentRow={handleAo2UpdateDbEnrollmentRow}
             onAo2DeleteDbRecord={handleAo2DeleteDbRecord}
             onAo2RestoreDatabase={handleAo2RestoreDatabase}
             onResetSystemDefaults={handleResetSystemDefaults}
+            onOpenInventoryPage={(fromRole) => {
+              setInventoryReturnRole(fromRole);
+              navigateToPage('inventory');
+            }}
+            onTeacherCreateRequisition={handleTeacherCreateRequisition}
+            onTeacherDeleteRequisition={handleTeacherDeleteRequisition}
+            onAo2ReviewRequisition={handleAo2ReviewRequisition}
+            onPrincipalReviewRequisition={handlePrincipalReviewRequisition}
+            onSubmitLeaveApplication={handleSubmitLeaveApplication}
+            onPrincipalDecideLeave={handlePrincipalDecideLeave}
+            onAo2EditLeaveApplication={handleAo2EditLeaveApplication}
+            onAo2EndorseLeaveApplication={handleAo2EndorseLeaveApplication}
+            onAo2DeleteLeaveApplication={handleAo2DeleteLeaveApplication}
           />
+        </main>
+      ) : currentPage === 'inventory' ? (
+        <InventoryDashboardPage
+          frontendConfig={frontendConfig}
+          activeAcademicYear={backendConfig.activeAcademicYear}
+          inventoryItems={inventoryItems}
+          ao2Username={ao2Session?.username ?? null}
+          principalUsername={principalSession?.username ?? null}
+          preferredReturnRole={inventoryReturnRole}
+          onBackToPortal={(role) => navigateToPage('portal', undefined, role)}
+          onNavigateHome={() => navigateToPage('home', '#top')}
+          onAddInventoryItem={handleAo2AddInventoryItem}
+          onUpdateInventoryItem={handleAo2UpdateInventoryItem}
+          onDeleteInventoryItem={handleAo2DeleteInventoryItem}
+        />
+      ) : backendConfig.maintenanceMode ? (
+        <main className="relative z-10 flex-1 bg-transparent py-20 px-6">
+          <div className="max-w-2xl mx-auto bg-white/95 backdrop-blur-xs rounded-2xl border border-[#D2DFD7] p-8 md:p-10 space-y-5 shadow-xs text-center">
+            <p className="text-xs font-semibold tracking-wide uppercase text-[#B45309]">
+              Public Website Offline · Scheduled Maintenance
+            </p>
+            <h1 className="font-display text-2xl md:text-3xl font-semibold text-[#111315]">
+              {frontendConfig.schoolName} public portal is temporarily offline.
+            </h1>
+            <p className="text-sm leading-relaxed text-[#525866]">
+              {backendConfig.maintenanceMessage}
+            </p>
+            <p className="text-xs text-[#3F5348] bg-[#F2F7F4] border border-[#D2DFD7] rounded-xl px-4 py-3">
+              All school records, staff and student accounts, posts, documents, and requisitions remain
+              safely preserved in the database while the public website is offline.
+            </p>
+            <div className="pt-2 flex justify-center">
+              <button
+                type="button"
+                onClick={() => navigateToPage('portal', undefined, 'ao2')}
+                style={{ backgroundColor: frontendConfig.accentColor }}
+                className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-semibold text-white rounded-lg hover:opacity-95 cursor-pointer"
+              >
+                <span>Open Staff &amp; AO-II Portals</span>
+                <ArrowUpRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
         </main>
       ) : currentPage === 'academics' ? (
         <main className="relative z-10 flex-1 bg-transparent">
@@ -1043,28 +2376,75 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#E4ECE7]">
-                        {(enrollmentByYear[backendConfig.activeAcademicYear] ?? []).map((row) => (
-                          <tr key={row.id} className="hover:bg-[#F5F9F7]">
-                            <td className="py-3.5 px-5 font-semibold text-[#111315] whitespace-nowrap">
-                              {row.gradeLabel}
-                            </td>
-                            <td className="py-3.5 px-4 text-xs text-[#525866] whitespace-nowrap">
-                              {row.division}
-                            </td>
-                            <td className="py-3.5 px-4 text-xs text-[#525866]">
-                              {row.curriculumFocus}
-                            </td>
-                            <td className="py-3.5 px-4 text-xs font-medium text-[#111315] whitespace-nowrap">
-                              {row.facultyLead}
-                            </td>
-                            <td className="py-3.5 px-5 text-right font-mono tabular-nums text-xs text-[#111315] whitespace-nowrap">
-                              {row.sections} sec · {row.teachers} teachers
-                            </td>
-                          </tr>
-                        ))}
+                        {(enrollmentByYear[backendConfig.activeAcademicYear] ?? []).map((row) => {
+                          const matchedStaff = staffRecords.find(
+                            (s) => s.role === 'Teacher' && s.assignedGradeId === row.id
+                          );
+                          return (
+                            <tr key={row.id} className="hover:bg-[#F5F9F7]">
+                              <td className="py-3.5 px-5 font-semibold text-[#111315] whitespace-nowrap">
+                                {row.gradeLabel}
+                              </td>
+                              <td className="py-3.5 px-4 text-xs text-[#525866] whitespace-nowrap">
+                                {row.division}
+                              </td>
+                              <td className="py-3.5 px-4 text-xs text-[#525866]">
+                                {row.curriculumFocus}
+                              </td>
+                              <td className="py-3.5 px-4 text-xs font-medium text-[#111315] whitespace-nowrap">
+                                {matchedStaff?.fullName ?? row.facultyLead}
+                              </td>
+                              <td className="py-3.5 px-5 text-right font-mono tabular-nums text-xs text-[#111315] whitespace-nowrap">
+                                {row.sections} sec · {row.teachers} teachers
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
+
+                  {staffRecords.length > 0 && (
+                    <div className="bg-white/95 backdrop-blur-xs rounded-2xl border border-[#D2DFD7] p-6 space-y-5 shadow-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p
+                            className="text-xs font-medium"
+                            style={{ color: frontendConfig.accentColor }}
+                          >
+                            School Leadership &amp; Faculty Directory
+                          </p>
+                          <h3 className="font-display text-xl font-semibold text-[#111315]">
+                            Active Academic Personnel (Live Database)
+                          </h3>
+                        </div>
+                        <span className="text-xs font-mono tabular-nums text-[#525866]">
+                          {staffRecords.length} Active Staff
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {staffRecords.map((staff) => (
+                          <div
+                            key={staff.id}
+                            className="rounded-xl border border-[#E2EAE5] bg-[#F8FBF9] p-4 space-y-1.5"
+                          >
+                            <div className="text-[11px] font-semibold text-[#15803D]">
+                              {staff.role} · {staff.assignedGradeLabel}
+                            </div>
+                            <div className="text-sm font-semibold text-[#111315]">
+                              {staff.fullName}
+                            </div>
+                            <div className="text-xs text-[#525866]">
+                              {staff.title} · {staff.department}
+                            </div>
+                            <div className="text-[11px] text-[#525866] pt-1">
+                              {staff.room} · {staff.email}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </section>
             </>
@@ -1107,6 +2487,7 @@ export default function App() {
           {frontendConfig.visibleSections.dashboard ? (
             <EnrollmentDashboard
               enrollmentByYear={enrollmentByYear}
+              staffRecords={staffRecords}
               defaultYear={backendConfig.activeAcademicYear}
               accentColor={frontendConfig.accentColor}
               canEdit={Boolean(ao2Session)}
@@ -1157,7 +2538,7 @@ export default function App() {
 
           <div className="relative z-10 max-w-[1200px] mx-auto px-6 py-14 lg:py-20">
             <div className="max-w-2xl md:max-w-none md:pr-[340px] lg:pr-[390px] space-y-6">
-              <p className="text-xs font-medium text-white/90 tracking-wide">
+              <p className="text-xs font-medium text-white/90 tracking-wide h-[18px]">
                 {frontendConfig.taglineLocation}
               </p>
               <h1 className="font-display text-[clamp(2.25rem,4.2vw,3.65rem)] leading-[1.08] font-semibold tracking-tight text-white max-w-2xl">
@@ -1302,8 +2683,17 @@ export default function App() {
 
 
 
-        {/* Section 3: Photos of Activities Conducted (Home Page) */}
-        <ActivitiesGallery accentColor={frontendConfig.accentColor} />
+        {/* Section 2: Campus Bulletin & Announcements (Viewing Only) */}
+        <HomeCommunityFeed
+          accentColor={frontendConfig.accentColor}
+          posts={homePosts}
+        />
+
+        {/* Section 3: Photos of Activities Conducted (Viewing Only) */}
+        <ActivitiesGallery
+          accentColor={frontendConfig.accentColor}
+          customPosts={activityPosts}
+        />
 
         {/* Section 4: Separate School Calendar of Activities (Home Page) */}
         <SchoolCalendar accentColor={frontendConfig.accentColor} />
@@ -1509,7 +2899,9 @@ export default function App() {
 
                 <div className="pt-6 border-t border-[#E2E5E9] space-y-2 text-xs text-[#525866]">
                   <p className="font-semibold text-[#111315]">
-                    {frontendConfig.schoolName} — Principal &amp; Enrollment Office
+                    {frontendConfig.schoolName} —{' '}
+                    {staffRecords.find((s) => s.role === 'Principal')?.fullName ??
+                      'Office of the School Administration'}
                   </p>
                   <p>{frontendConfig.campusAddress}</p>
                   <p className="font-mono tabular-nums text-[#111315]">

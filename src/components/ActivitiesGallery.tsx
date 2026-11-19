@@ -5,10 +5,12 @@ import {
   ActivityCategory,
   ActivityPhotoItem,
 } from '../data/schoolData';
+import { ActivityPostItem } from '../types/schoolConfig';
 import { ResilientImage } from './ResilientImage';
 
 interface ActivitiesGalleryProps {
   accentColor: string;
+  customPosts: ActivityPostItem[];
 }
 
 const CATEGORIES: ActivityCategory[] = [
@@ -18,21 +20,40 @@ const CATEGORIES: ActivityCategory[] = [
   'Athletics & Field',
 ];
 
-export function ActivitiesGallery({ accentColor }: ActivitiesGalleryProps) {
+type MergedActivityItem = ActivityPhotoItem & {
+  isCustom?: boolean;
+  authorRole?: 'Teacher' | 'Principal' | 'AO-II';
+  authorName?: string;
+  authorAccountId?: string;
+  createdAt?: string;
+};
+
+export function ActivitiesGallery({
+  accentColor,
+  customPosts,
+}: ActivitiesGalleryProps) {
   const [activeCategory, setActiveCategory] = useState<ActivityCategory>('All Activities');
-  const [lightboxPhoto, setLightboxPhoto] = useState<ActivityPhotoItem | null>(null);
+  const [lightboxPhoto, setLightboxPhoto] = useState<MergedActivityItem | null>(null);
+
+  const mergedPhotos: MergedActivityItem[] = useMemo(() => {
+    const mappedCustom: MergedActivityItem[] = customPosts.map((p) => ({
+      ...p,
+      isCustom: true,
+    }));
+    return [...mappedCustom, ...ACTIVITIES_GALLERY];
+  }, [customPosts]);
 
   const filteredPhotos = useMemo(() => {
-    if (activeCategory === 'All Activities') return ACTIVITIES_GALLERY;
-    return ACTIVITIES_GALLERY.filter((item) => item.category === activeCategory);
-  }, [activeCategory]);
+    if (activeCategory === 'All Activities') return mergedPhotos;
+    return mergedPhotos.filter((item) => item.category === activeCategory);
+  }, [activeCategory, mergedPhotos]);
 
   useEffect(() => {
     if (!lightboxPhoto) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setLightboxPhoto(null);
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        const pool = filteredPhotos.length > 0 ? filteredPhotos : ACTIVITIES_GALLERY;
+        const pool = filteredPhotos.length > 0 ? filteredPhotos : mergedPhotos;
         const idx = pool.findIndex((p) => p.id === lightboxPhoto.id);
         const base = idx === -1 ? 0 : idx;
         const nextIdx =
@@ -49,11 +70,11 @@ export function ActivitiesGallery({ accentColor }: ActivitiesGalleryProps) {
       window.removeEventListener('keydown', onKeyDown);
       document.body.style.overflow = prevOverflow;
     };
-  }, [lightboxPhoto, filteredPhotos]);
+  }, [lightboxPhoto, filteredPhotos, mergedPhotos]);
 
   const stepPhoto = (dir: 'prev' | 'next') => {
     if (!lightboxPhoto) return;
-    const pool = filteredPhotos.length > 0 ? filteredPhotos : ACTIVITIES_GALLERY;
+    const pool = filteredPhotos.length > 0 ? filteredPhotos : mergedPhotos;
     const idx = pool.findIndex((p) => p.id === lightboxPhoto.id);
     const base = idx === -1 ? 0 : idx;
     const nextIdx =
@@ -64,7 +85,7 @@ export function ActivitiesGallery({ accentColor }: ActivitiesGalleryProps) {
   return (
     <section id="activities" className="py-16 lg:py-24 bg-transparent border-b border-[#D2DFD7]">
       <div className="max-w-[1200px] mx-auto px-6 space-y-10">
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
           <div className="space-y-3 max-w-2xl">
             <p className="text-xs font-medium" style={{ color: accentColor }}>
               Student Life &amp; Activities Conducted
@@ -73,23 +94,23 @@ export function ActivitiesGallery({ accentColor }: ActivitiesGalleryProps) {
               Photos from science fairs, recitals, botanical labs, and field days.
             </h2>
             <p className="text-sm md:text-base text-[#525866]">
-              Explore recent school-wide events and classroom activities documented across our K–12
-              divisions. Click any photograph to enlarge.
+              Explore school-wide events and student activities documented across Kindergarten
+              through Grade 6.
             </p>
           </div>
 
           <div
             role="group"
             aria-label="Filter conducted activities by category"
-            className="inline-flex flex-wrap items-center gap-1 p-1 bg-white/90 rounded-lg border border-[#D2DFD7] self-start md:self-auto shadow-xs"
+            className="inline-flex flex-wrap items-center gap-1 p-1 bg-white/90 rounded-lg border border-[#D2DFD7] self-start lg:self-auto shadow-xs"
           >
-            {CATEGORIES.map((category) => {
-              const active = activeCategory === category;
+            {CATEGORIES.map((cat) => {
+              const active = activeCategory === cat;
               return (
                 <button
-                  key={category}
+                  key={cat}
                   type="button"
-                  onClick={() => setActiveCategory(category)}
+                  onClick={() => setActiveCategory(cat)}
                   aria-pressed={active}
                   className={`px-3.5 py-2 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                     active
@@ -97,7 +118,7 @@ export function ActivitiesGallery({ accentColor }: ActivitiesGalleryProps) {
                       : 'text-[#3F4A44] hover:text-[#111315]'
                   }`}
                 >
-                  {category}
+                  {cat}
                 </button>
               );
             })}
@@ -117,6 +138,7 @@ export function ActivitiesGallery({ accentColor }: ActivitiesGalleryProps) {
                 className="relative aspect-[4/3] w-full overflow-hidden bg-[#EAEDF1] text-left cursor-pointer focus-visible:outline-2 focus-visible:outline-inset"
               >
                 <ResilientImage
+                  key={item.image}
                   src={item.image}
                   alt={item.imageAlt}
                   title={item.title}
@@ -131,6 +153,14 @@ export function ActivitiesGallery({ accentColor }: ActivitiesGalleryProps) {
                     <span>{item.category}</span>
                     <span aria-hidden="true">·</span>
                     <span>{item.dateConducted}</span>
+                    {item.authorName && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>
+                          {item.authorName} ({item.authorRole})
+                        </span>
+                      </>
+                    )}
                   </div>
                   <h3 className="font-display text-lg font-semibold text-[#111315]">
                     {item.title}
@@ -139,7 +169,7 @@ export function ActivitiesGallery({ accentColor }: ActivitiesGalleryProps) {
                 </div>
 
                 <div className="pt-3 border-t border-[#E2E5E9] flex items-center justify-between gap-2 text-[11px] text-[#525866]">
-                  <span>{item.location}</span>
+                  <span className="truncate">{item.location}</span>
                   <button
                     type="button"
                     onClick={() => setLightboxPhoto(item)}
@@ -202,6 +232,7 @@ export function ActivitiesGallery({ accentColor }: ActivitiesGalleryProps) {
 
             <div className="aspect-[16/10] w-full bg-[#EAEDF1]">
               <ResilientImage
+                key={lightboxPhoto.image}
                 src={lightboxPhoto.image}
                 alt={lightboxPhoto.imageAlt}
                 title={lightboxPhoto.title}
@@ -219,6 +250,9 @@ export function ActivitiesGallery({ accentColor }: ActivitiesGalleryProps) {
               </h3>
               <p className="text-xs font-medium" style={{ color: accentColor }}>
                 {lightboxPhoto.participants}
+                {lightboxPhoto.authorName
+                  ? ` · Posted by ${lightboxPhoto.authorName} (${lightboxPhoto.authorRole})`
+                  : ''}
               </p>
               <p className="text-sm leading-relaxed text-[#525866] pt-1">
                 {lightboxPhoto.description}

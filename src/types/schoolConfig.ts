@@ -1,4 +1,8 @@
-import type { AcademicYear, GradeEnrollmentRow } from '../data/schoolData';
+import type {
+  AcademicYear,
+  AttendanceStatus,
+  GradeEnrollmentRow,
+} from '../data/schoolData';
 
 export interface SiteFrontendConfig {
   schoolName: string;
@@ -70,6 +74,13 @@ export interface AdmissionsSubmission {
   status: 'New Inquiry' | 'Tour Scheduled' | 'Reviewed';
 }
 
+export type InventoryCategory =
+  | 'Equipment'
+  | 'School Supplies'
+  | 'Books'
+  | 'Buildings'
+  | 'Others';
+
 export type InventoryStatus =
   | 'Available'
   | 'Issued'
@@ -80,11 +91,190 @@ export type InventoryStatus =
 export interface InventoryItem {
   id: string;
   itemName: string;
+  category: InventoryCategory;
   quantity: number;
+  unit?: string;
   status: InventoryStatus;
+  location?: string;
   dateReceived: string;
   issuedToUser: string;
   dateIssued: string;
+  conditionNotes?: string;
+}
+
+export type StaffRole = 'Teacher' | 'Principal' | 'Administrative Officer' | 'Support Staff';
+export type StaffEmploymentStatus =
+  | 'Regular / Permanent'
+  | 'Contractual'
+  | 'Volunteer'
+  | 'On Leave';
+
+export interface StaffMemberRecord {
+  id: string;
+  fullName: string;
+  role: StaffRole;
+  title: string;
+  department: string;
+  assignedGradeId: string;
+  assignedGradeLabel: string;
+  email: string;
+  phone: string;
+  room: string;
+  officeHours: string;
+  employmentStatus: StaffEmploymentStatus;
+  portalUsername?: string;
+  updatedAt: string;
+}
+
+export type StudentEnrollmentStatus =
+  | 'Enrolled'
+  | 'Transferred In'
+  | 'Transferred Out'
+  | 'Graduated';
+
+export interface StudentRecord {
+  id: string;
+  lrn: string;
+  studentName: string;
+  gradeId: string;
+  gradeLabel: string;
+  section: string;
+  adviserId: string;
+  adviserName: string;
+  academicYear: AcademicYear;
+  enrollmentStatus: StudentEnrollmentStatus;
+  attendance: AttendanceStatus;
+  currentAverage: number;
+  missingWork: number;
+  guardianName: string;
+  guardianContact: string;
+  updatedAt: string;
+}
+
+export type ActivityPostCategory = 'STEM & Labs' | 'Arts & Music' | 'Athletics & Field';
+
+export interface ActivityPostItem {
+  id: string;
+  title: string;
+  category: ActivityPostCategory;
+  dateConducted: string;
+  participants: string;
+  location: string;
+  description: string;
+  image: string;
+  imageAlt: string;
+  authorRole: 'Teacher' | 'Principal' | 'AO-II';
+  authorName: string;
+  authorAccountId: string;
+  createdAt: string;
+}
+
+export type HomePostCategory =
+  | 'Announcement'
+  | 'Campus Update'
+  | 'Classroom Story'
+  | 'Photo Post'
+  | 'Achievement'
+  | 'General';
+
+export interface HomeFeedPost {
+  id: string;
+  title: string;
+  content: string;
+  category: HomePostCategory;
+  authorRole: 'Teacher' | 'Principal' | 'AO-II';
+  authorName: string;
+  authorUsername: string;
+  authorAccountId: string;
+  createdAt: string;
+  imageUrl?: string;
+  imageAlt?: string;
+  pinned?: boolean;
+}
+
+export type MaterialRequisitionCategory = 'School Supplies' | 'Equipment' | 'Other';
+export type RequisitionUrgency = 'Routine' | 'Priority' | 'Urgent';
+export type Ao2RequisitionStatus = 'Pending Review' | 'Approved' | 'Declined' | 'Endorsed';
+export type PrincipalRequisitionStatus = 'Pending Principal' | 'Approved' | 'Disapproved';
+
+export interface MaterialRequisition {
+  id: string;
+  teacherId: string;
+  teacherName: string;
+  teacherGradeSection: string;
+  itemName: string;
+  category: MaterialRequisitionCategory;
+  quantity: number;
+  unit: string;
+  urgency: RequisitionUrgency;
+  neededBy?: string;
+  purpose: string;
+  submittedAt: string;
+  ao2Status: Ao2RequisitionStatus;
+  ao2Note?: string;
+  ao2ReviewedAt?: string;
+  ao2ReviewedBy?: string;
+  principalStatus?: PrincipalRequisitionStatus;
+  principalNote?: string;
+  principalReviewedAt?: string;
+  principalReviewedBy?: string;
+}
+
+export type LeaveType =
+  | 'Vacation Leave'
+  | 'Sick Leave'
+  | 'Wellness Leave'
+  | 'Special Privilege Leave'
+  | 'Maternity / Paternity Leave'
+  | 'Emergency / Calamity Leave'
+  | 'Study / Official Business Leave'
+  | 'Other';
+
+export type LeaveDecisionStatus = 'Pending' | 'Approved' | 'Disapproved';
+export type Ao2LeaveEndorsementStatus = 'Pending Endorsement' | 'Endorsed';
+
+export interface LeaveApplication {
+  id: string;
+  applicantAccountId: string;
+  applicantRole: 'Teacher' | 'Principal' | 'AO-II';
+  applicantName: string;
+  applicantUsername: string;
+  applicantDepartmentOrGrade: string;
+  leaveType: LeaveType;
+  startDate: string;
+  endDate: string;
+  numberOfDays: number;
+  reason: string;
+  contactDuringLeave?: string;
+  coveringStaff?: string;
+  submittedAt: string;
+  ao2EndorsementStatus?: Ao2LeaveEndorsementStatus;
+  ao2EndorsedAt?: string;
+  ao2EndorsedBy?: string;
+  principalStatus: LeaveDecisionStatus;
+  principalNote?: string;
+  principalReviewedAt?: string;
+  principalReviewedBy?: string;
+  ao2EditNote?: string;
+  lastEditedByAo2At?: string;
+  lastEditedByAo2Name?: string;
+}
+
+export interface TeacherAdvisoryNote {
+  id: string;
+  teacherId: string;
+  authorName: string;
+  text: string;
+  timestamp: string;
+}
+
+export interface StudentDocFeedbackEntry {
+  id: string;
+  docId: string;
+  teacherId: string;
+  authorName: string;
+  comment: string;
+  updatedAt: string;
 }
 
 export interface AdminAuditEntry {
@@ -99,7 +289,12 @@ export interface AdminAuditEntry {
     | 'Account Auth'
     | 'Endorsement'
     | 'Inventory'
-    | 'Database';
+    | 'Requisition'
+    | 'Leave'
+    | 'Database'
+    | 'Staff'
+    | 'Students'
+    | 'Community Posts';
   summary: string;
   timestamp: string;
 }
@@ -114,6 +309,13 @@ export interface TeacherAccountSummary extends StaffAccountSummary {
   teacherId: string;
 }
 
+export interface Ao2AccountSummary extends StaffAccountSummary {
+  accountId: string;
+  fullName: string;
+  title: string;
+  isPrimary?: boolean;
+}
+
 export interface SchoolSystemBootstrap {
   frontendConfig: SiteFrontendConfig;
   backendConfig: SiteBackendConfig;
@@ -121,16 +323,36 @@ export interface SchoolSystemBootstrap {
   uploadedDocuments: UploadedCourseDocument[];
   admissionsSubmissions: AdmissionsSubmission[];
   inventoryItems: InventoryItem[];
+  materialRequisitions: MaterialRequisition[];
+  leaveApplications?: LeaveApplication[];
+  staffRecords: StaffMemberRecord[];
+  studentRecords: StudentRecord[];
+  activityPosts: ActivityPostItem[];
+  homePosts: HomeFeedPost[];
+  teacherNotes?: TeacherAdvisoryNote[];
+  studentDocFeedback?: StudentDocFeedbackEntry[];
   auditLog: AdminAuditEntry[];
   teacherAccounts: TeacherAccountSummary[];
-  principalAccount: StaffAccountSummary;
+  principalAccount: StaffAccountSummary | null;
   ao2Account: StaffAccountSummary;
+  ao2Accounts?: Ao2AccountSummary[];
 }
 
 export type DatabaseRecordCollection =
   | 'inventoryItems'
+  | 'materialRequisitions'
+  | 'leaveApplications'
   | 'uploadedDocuments'
   | 'admissionsSubmissions'
+  | 'staffRecords'
+  | 'teacherAccounts'
+  | 'principalAccount'
+  | 'ao2Accounts'
+  | 'studentRecords'
+  | 'activityPosts'
+  | 'homePosts'
+  | 'teacherNotes'
+  | 'studentDocFeedback'
   | 'auditLog';
 
 export interface DatabaseOverview {
@@ -141,8 +363,16 @@ export interface DatabaseOverview {
   counts: {
     enrollmentRows: number;
     inventoryItems: number;
+    materialRequisitions: number;
+    leaveApplications?: number;
     uploadedDocuments: number;
     admissionsSubmissions: number;
+    staffRecords: number;
+    studentRecords: number;
+    activityPosts: number;
+    homePosts: number;
+    teacherNotes?: number;
+    studentDocFeedback?: number;
     staffAccounts: number;
     auditLog: number;
   };

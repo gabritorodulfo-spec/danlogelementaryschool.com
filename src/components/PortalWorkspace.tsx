@@ -1,6 +1,7 @@
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ArrowUpRight,
   Award,
   Check,
   CheckCircle2,
@@ -15,6 +16,7 @@ import {
   Lock,
   LogOut,
   Maximize2,
+  Minus,
   Package,
   Pencil,
   Plus,
@@ -39,26 +41,61 @@ import {
   TeacherSubmittedDocument,
 } from '../data/schoolData';
 import {
+  ActivityPostCategory,
+  ActivityPostItem,
   AdminAuditEntry,
   AdmissionsSubmission,
+  Ao2AccountSummary,
+  Ao2RequisitionStatus,
   DatabaseOverview,
   DatabaseRecordCollection,
+  HomeFeedPost,
+  HomePostCategory,
   InventoryItem,
-  InventoryStatus,
+  LeaveApplication,
+  LeaveType,
+  MaterialRequisition,
+  MaterialRequisitionCategory,
   PrincipalDocumentStatus,
+  PrincipalRequisitionStatus,
+  RequisitionUrgency,
   SchoolSystemBootstrap,
   SiteBackendConfig,
   SiteFrontendConfig,
   StaffAccountSummary,
+  StaffMemberRecord,
+  StudentDocFeedbackEntry,
+  StudentRecord,
   TeacherAccountSummary,
+  TeacherAdvisoryNote,
   UploadedCourseDocument,
 } from '../types/schoolConfig';
+import { Ao2StaffStudentsManager } from './Ao2StaffStudentsManager';
+import { LeaveApplicationWorkspace } from './LeaveApplicationViews';
+import {
+  Ao2MaterialRequisitionView,
+  PrincipalMaterialRequisitionView,
+  TeacherMaterialRequisitionView,
+} from './MaterialRequisitionViews';
+import { PortalPostPublisher } from './PortalPostPublisher';
 
 export type RoleWorkspace = 'teacher' | 'principal' | 'ao2';
-type TeacherTab = 'submitted' | 'upload' | 'roster' | 'schedule' | 'security';
-type PrincipalTab = 'documents' | 'security';
+type TeacherTab =
+  | 'submitted'
+  | 'upload'
+  | 'roster'
+  | 'schedule'
+  | 'requisitions'
+  | 'leave'
+  | 'posts'
+  | 'security';
+type PrincipalTab = 'documents' | 'requisitions' | 'leave' | 'posts' | 'security';
 type Ao2Tab =
   | 'dashboard'
+  | 'records'
+  | 'requisitions'
+  | 'leave'
+  | 'posts'
   | 'endorsed'
   | 'frontend'
   | 'backend'
@@ -74,7 +111,9 @@ export interface TeacherAuthSession {
 }
 
 export interface StaffAuthSession {
+  accountId?: string;
   username: string;
+  fullName?: string;
   token: string;
 }
 
@@ -83,6 +122,7 @@ const DEFAULT_FACULTY_PASSWORDS: Record<string, string> = {
   't-chen': 'NarraLab#2026',
   't-brooks': 'MolaveRead#2026',
 };
+const DEFAULT_GENERIC_FACULTY_PASSWORD = 'DanlogFaculty#2026';
 
 const DEFAULT_PRINCIPAL_PASSWORD = 'DanlogPrincipal#1975';
 const DEFAULT_AO2_PASSWORD = 'DanlogAO2#1975';
@@ -95,10 +135,19 @@ interface PortalWorkspaceProps {
   uploadedDocuments: UploadedCourseDocument[];
   admissionsSubmissions: AdmissionsSubmission[];
   inventoryItems: InventoryItem[];
+  materialRequisitions: MaterialRequisition[];
+  leaveApplications?: LeaveApplication[];
+  staffRecords: StaffMemberRecord[];
+  studentRecords: StudentRecord[];
+  activityPosts: ActivityPostItem[];
+  homePosts: HomeFeedPost[];
+  teacherNotes?: TeacherAdvisoryNote[];
+  studentDocFeedback?: StudentDocFeedbackEntry[];
   auditLog: AdminAuditEntry[];
   teacherAccounts: TeacherAccountSummary[];
   principalAccount: StaffAccountSummary | null;
   ao2Account: StaffAccountSummary | null;
+  ao2Accounts?: Ao2AccountSummary[];
   teacherSession: TeacherAuthSession | null;
   principalSession: StaffAuthSession | null;
   ao2Session: StaffAuthSession | null;
@@ -116,19 +165,82 @@ interface PortalWorkspaceProps {
   ) => Promise<{ ok: boolean; error?: string }>;
   onAo2Login: (username: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   onAo2Logout: () => Promise<void>;
+  onAo2CreateTeacherAccount: (payload: {
+    fullName: string;
+    title: string;
+    department: string;
+    assignedGradeId: string;
+    assignedGradeLabel: string;
+    email: string;
+    phone?: string;
+    room: string;
+    officeHours?: string;
+    employmentStatus?: StaffMemberRecord['employmentStatus'];
+    username: string;
+    newPassword: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
   onAo2UpdateTeacherAccount: (
     teacherId: string,
     username: string,
-    newPassword?: string
+    newPassword?: string,
+    profilePatch?: Partial<Omit<StaffMemberRecord, 'id' | 'updatedAt'>>
   ) => Promise<{ ok: boolean; error?: string }>;
+  onAo2DeleteTeacherAccount: (teacherId: string) => Promise<{ ok: boolean; error?: string }>;
   onAo2UpdatePrincipalAccount: (
     username: string,
-    newPassword?: string
+    newPassword?: string,
+    profilePatch?: {
+      fullName?: string;
+      title?: string;
+      department?: string;
+      email?: string;
+      phone?: string;
+      room?: string;
+      officeHours?: string;
+    }
   ) => Promise<{ ok: boolean; error?: string }>;
+  onAo2CreatePrincipalAccount?: (payload: {
+    fullName: string;
+    title: string;
+    department: string;
+    email: string;
+    phone?: string;
+    room: string;
+    officeHours?: string;
+    employmentStatus?: StaffMemberRecord['employmentStatus'];
+    username: string;
+    newPassword: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  onAo2DeletePrincipalAccount?: () => Promise<{ ok: boolean; error?: string }>;
   onAo2UpdateOwnAccount: (
     username: string,
-    newPassword?: string
+    newPassword?: string,
+    profilePatch?: {
+      accountId?: string;
+      fullName?: string;
+      title?: string;
+      department?: string;
+      email?: string;
+      phone?: string;
+      room?: string;
+      officeHours?: string;
+    }
   ) => Promise<{ ok: boolean; error?: string }>;
+  onAo2CreateAdminAccount?: (payload: {
+    fullName: string;
+    title: string;
+    department: string;
+    email: string;
+    phone?: string;
+    room: string;
+    officeHours?: string;
+    employmentStatus?: StaffMemberRecord['employmentStatus'];
+    username: string;
+    newPassword: string;
+    setAsPrimary?: boolean;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  onAo2SetPrimaryAdminAccount?: (accountId: string) => Promise<{ ok: boolean; error?: string }>;
+  onAo2DeleteAdminAccount?: (accountId: string) => Promise<{ ok: boolean; error?: string }>;
   onSaveFrontendConfig: (next: SiteFrontendConfig) => Promise<void>;
   onSaveBackendConfig: (next: SiteBackendConfig) => Promise<void>;
   onUpdateCapacity: (year: AcademicYear, gradeId: string, nextCap: number) => Promise<void>;
@@ -151,14 +263,53 @@ interface PortalWorkspaceProps {
     note?: string
   ) => Promise<{ ok: boolean; error?: string }>;
   onUpdateAdmissionStatus: (id: string, status: AdmissionsSubmission['status']) => Promise<void>;
-  onAo2AddInventoryItem: (
-    payload: Omit<InventoryItem, 'id'>
+  onAo2AddStaffRecord: (
+    payload: Omit<StaffMemberRecord, 'id' | 'updatedAt'> & {
+      createPortalLogin?: boolean;
+      initialPassword?: string;
+    }
   ) => Promise<{ ok: boolean; error?: string }>;
-  onAo2UpdateInventoryItem: (
+  onAo2UpdateStaffRecord: (
     id: string,
-    patch: Partial<Omit<InventoryItem, 'id'>>
+    patch: Partial<Omit<StaffMemberRecord, 'id' | 'updatedAt'>> & { newPassword?: string }
   ) => Promise<{ ok: boolean; error?: string }>;
-  onAo2DeleteInventoryItem: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  onAo2DeleteStaffRecord: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  onAo2AddStudentRecord: (
+    payload: Omit<StudentRecord, 'id' | 'updatedAt'>
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onAo2UpdateStudentRecord: (
+    id: string,
+    patch: Partial<Omit<StudentRecord, 'id' | 'updatedAt'>>
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onAo2DeleteStudentRecord: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  onUpdateStudentAttendance: (studentId: string, attendance: AttendanceStatus) => Promise<void>;
+  onAddTeacherNote?: (
+    teacherId: string,
+    text: string
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onSaveStudentDocFeedback?: (
+    docId: string,
+    teacherId: string,
+    comment: string
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onCreateActivityPost: (payload: {
+    title: string;
+    category: ActivityPostCategory;
+    dateConducted: string;
+    participants: string;
+    location: string;
+    description: string;
+    imageFile?: File | null;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  onDeleteActivityPost: (postId: string) => Promise<{ ok: boolean; error?: string }>;
+  onCreateHomePost: (payload: {
+    title: string;
+    content: string;
+    category: HomePostCategory;
+    pinned?: boolean;
+    imageFile?: File | null;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  onDeleteHomePost: (postId: string) => Promise<{ ok: boolean; error?: string }>;
   onAo2FetchDatabase: () => Promise<{ ok: boolean; overview?: DatabaseOverview; error?: string }>;
   onAo2UpdateDbEnrollmentRow: (payload: {
     year: AcademicYear;
@@ -177,6 +328,59 @@ interface PortalWorkspaceProps {
     payload: Partial<SchoolSystemBootstrap>
   ) => Promise<{ ok: boolean; overview?: DatabaseOverview; error?: string }>;
   onResetSystemDefaults: () => Promise<void>;
+  onOpenInventoryPage: (fromRole: 'ao2' | 'principal') => void;
+  onTeacherCreateRequisition: (payload: {
+    itemName: string;
+    category: MaterialRequisitionCategory;
+    quantity: number;
+    unit: string;
+    urgency: RequisitionUrgency;
+    neededBy?: string;
+    purpose: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  onTeacherDeleteRequisition: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  onAo2ReviewRequisition: (
+    id: string,
+    payload: { ao2Status?: Ao2RequisitionStatus; ao2Note?: string }
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onPrincipalReviewRequisition: (
+    id: string,
+    payload: { principalStatus?: PrincipalRequisitionStatus; principalNote?: string }
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onSubmitLeaveApplication: (
+    actorRole: 'Teacher' | 'Principal' | 'AO-II',
+    payload: {
+      leaveType: LeaveType;
+      startDate: string;
+      endDate: string;
+      numberOfDays: number;
+      reason: string;
+      contactDuringLeave?: string;
+      coveringStaff?: string;
+    }
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onPrincipalDecideLeave: (
+    id: string,
+    payload: { principalStatus: 'Approved' | 'Disapproved'; principalNote?: string }
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onAo2EditLeaveApplication: (
+    id: string,
+    payload: {
+      leaveType: LeaveType;
+      startDate: string;
+      endDate: string;
+      numberOfDays: number;
+      reason: string;
+      contactDuringLeave?: string;
+      coveringStaff?: string;
+      ao2EditNote?: string;
+    }
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onAo2EndorseLeaveApplication: (
+    id: string,
+    endorsementStatus?: 'Endorsed' | 'Pending Endorsement'
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onAo2DeleteLeaveApplication: (id: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 const HERO_PRESETS = [
@@ -220,10 +424,19 @@ export function PortalWorkspace({
   uploadedDocuments,
   admissionsSubmissions,
   inventoryItems,
+  materialRequisitions,
+  leaveApplications = [],
+  staffRecords,
+  studentRecords,
+  activityPosts,
+  homePosts,
+  teacherNotes = [],
+  studentDocFeedback = [],
   auditLog,
   teacherAccounts,
   principalAccount,
   ao2Account,
+  ao2Accounts = [],
   teacherSession,
   principalSession,
   ao2Session,
@@ -235,9 +448,16 @@ export function PortalWorkspace({
   onPrincipalChangePassword,
   onAo2Login,
   onAo2Logout,
+  onAo2CreateTeacherAccount,
   onAo2UpdateTeacherAccount,
+  onAo2DeleteTeacherAccount,
   onAo2UpdatePrincipalAccount,
+  onAo2CreatePrincipalAccount,
+  onAo2DeletePrincipalAccount,
   onAo2UpdateOwnAccount,
+  onAo2CreateAdminAccount,
+  onAo2SetPrimaryAdminAccount,
+  onAo2DeleteAdminAccount,
   onSaveFrontendConfig,
   onSaveBackendConfig,
   onUpdateCapacity,
@@ -245,14 +465,34 @@ export function PortalWorkspace({
   onDeleteUploadedDocument,
   onPrincipalReviewDocument,
   onUpdateAdmissionStatus,
-  onAo2AddInventoryItem,
-  onAo2UpdateInventoryItem,
-  onAo2DeleteInventoryItem,
+  onAo2AddStaffRecord,
+  onAo2UpdateStaffRecord,
+  onAo2DeleteStaffRecord,
+  onAo2AddStudentRecord,
+  onAo2UpdateStudentRecord,
+  onAo2DeleteStudentRecord,
+  onUpdateStudentAttendance,
+  onAddTeacherNote,
+  onSaveStudentDocFeedback,
+  onCreateActivityPost,
+  onDeleteActivityPost,
+  onCreateHomePost,
+  onDeleteHomePost,
   onAo2FetchDatabase,
   onAo2UpdateDbEnrollmentRow,
   onAo2DeleteDbRecord,
   onAo2RestoreDatabase,
   onResetSystemDefaults,
+  onOpenInventoryPage,
+  onTeacherCreateRequisition,
+  onTeacherDeleteRequisition,
+  onAo2ReviewRequisition,
+  onPrincipalReviewRequisition,
+  onSubmitLeaveApplication,
+  onPrincipalDecideLeave,
+  onAo2EditLeaveApplication,
+  onAo2EndorseLeaveApplication,
+  onAo2DeleteLeaveApplication,
 }: PortalWorkspaceProps) {
   const [roleWorkspace, setRoleWorkspace] = useState<RoleWorkspace>(initialRole);
 
@@ -347,47 +587,85 @@ export function PortalWorkspace({
   const [ao2SaveMessage, setAo2SaveMessage] = useState('');
   const [ao2ErrorMessage, setAo2ErrorMessage] = useState('');
   const [accountDrafts, setAccountDrafts] = useState<
-    Record<string, { username: string; newPassword: string }>
+    Record<
+      string,
+      {
+        username: string;
+        newPassword: string;
+        fullName: string;
+        title: string;
+        department: string;
+        assignedGradeId: string;
+        assignedGradeLabel: string;
+        room: string;
+        email: string;
+        employmentStatus: StaffMemberRecord['employmentStatus'];
+      }
+    >
   >({});
-  const [principalDraft, setPrincipalDraft] = useState({ username: '', newPassword: '' });
-  const [ao2OwnDraft, setAo2OwnDraft] = useState({ username: '', newPassword: '' });
+  const [editingAccountProfileId, setEditingAccountProfileId] = useState<string | null>(null);
+  const [confirmDeleteAccountId, setConfirmDeleteAccountId] = useState<string | null>(null);
+  const [accountBusyId, setAccountBusyId] = useState<string | null>(null);
+  const [showAddAccountModal, setShowAddAccountModal] = useState(false);
+  const [addAccountMode, setAddAccountMode] = useState<'portal' | 'admin' | 'principal' | 'staff'>('portal');
+  const [newAccSetPrimaryAdmin, setNewAccSetPrimaryAdmin] = useState(true);
+  const [newAccFullName, setNewAccFullName] = useState('');
+  const [newAccRole, setNewAccRole] = useState<StaffMemberRecord['role']>('Teacher');
+  const [newAccTitle, setNewAccTitle] = useState('Classroom Adviser');
+  const [newAccDepartment, setNewAccDepartment] = useState('Primary & Intermediate Division');
+  const [newAccGradeId, setNewAccGradeId] = useState('g1');
+  const [newAccGradeLabel, setNewAccGradeLabel] = useState('Grade 1 · Primary Division');
+  const [newAccRoom, setNewAccRoom] = useState('Building 1 · Room 104');
+  const [newAccEmail, setNewAccEmail] = useState('');
+  const [newAccStatus, setNewAccStatus] =
+    useState<StaffMemberRecord['employmentStatus']>('Regular / Permanent');
+  const [newAccUsername, setNewAccUsername] = useState('');
+  const [newAccPassword, setNewAccPassword] = useState('');
+  const [isCreatingAccount, setIsCreatingAccount] = useState(false);
+  const [principalDraft, setPrincipalDraft] = useState({
+    username: '',
+    newPassword: '',
+    fullName: '',
+    title: 'School Principal',
+  });
+  const [confirmDeletePrincipal, setConfirmDeletePrincipal] = useState(false);
+  const [ao2AdminDrafts, setAo2AdminDrafts] = useState<
+    Record<
+      string,
+      {
+        username: string;
+        newPassword: string;
+        fullName: string;
+        title: string;
+      }
+    >
+  >({});
+  const [confirmDeleteAdminId, setConfirmDeleteAdminId] = useState<string | null>(null);
   const [ao2DocTeacherFilter, setAo2DocTeacherFilter] = useState<string>('ALL');
   const [ao2DocSearch, setAo2DocSearch] = useState('');
   const [selectedAo2DocId, setSelectedAo2DocId] = useState<string | null>(null);
   const [ao2DocViewMode, setAo2DocViewMode] = useState<'content' | 'file'>('content');
   const [ao2DocModalOpen, setAo2DocModalOpen] = useState(false);
-
-  // AO-II Inventory List state
-  const [inventorySearch, setInventorySearch] = useState('');
-  const [inventoryStatusFilter, setInventoryStatusFilter] = useState<'ALL' | InventoryStatus>('ALL');
-  const [showAddInventoryForm, setShowAddInventoryForm] = useState(false);
-  const [newInvName, setNewInvName] = useState('');
-  const [newInvQty, setNewInvQty] = useState('1');
-  const [newInvStatus, setNewInvStatus] = useState<InventoryStatus>('Available');
-  const [newInvDateReceived, setNewInvDateReceived] = useState(() =>
-    new Date().toISOString().slice(0, 10)
-  );
-  const [newInvUser, setNewInvUser] = useState('');
-  const [newInvDateIssued, setNewInvDateIssued] = useState('');
-  const [isSavingInventory, setIsSavingInventory] = useState(false);
-  const [editingInventoryId, setEditingInventoryId] = useState<string | null>(null);
-  const [editInvDraft, setEditInvDraft] = useState<Omit<InventoryItem, 'id'>>({
-    itemName: '',
-    quantity: 1,
-    status: 'Available',
-    dateReceived: '',
-    issuedToUser: '',
-    dateIssued: '',
-  });
+  const [ao2DashDivision, setAo2DashDivision] = useState<
+    'All' | 'Primary (K–3)' | 'Intermediate (4–6)'
+  >('All');
 
   // AO-II Database Manager state
   const [dbOverview, setDbOverview] = useState<DatabaseOverview | null>(null);
   const [dbLoading, setDbLoading] = useState(false);
   const [dbCollection, setDbCollection] = useState<
     | 'enrollment'
+    | 'staffRecords'
+    | 'studentRecords'
     | 'inventoryItems'
+    | 'materialRequisitions'
+    | 'leaveApplications'
     | 'uploadedDocuments'
     | 'admissionsSubmissions'
+    | 'homePosts'
+    | 'activityPosts'
+    | 'teacherNotes'
+    | 'studentDocFeedback'
     | 'accounts'
     | 'auditLog'
     | 'json'
@@ -438,53 +716,205 @@ export function PortalWorkspace({
     setExtensionsText(backendConfig.allowedExtensions.join(', '));
   }, [backendConfig]);
 
+  const principalStaffRecord = useMemo(
+    () =>
+      staffRecords.find((s) => s.role === 'Principal') ??
+      staffRecords.find((s) => s.id === 'staff-principal') ??
+      null,
+    [staffRecords]
+  );
+  const ao2AdminAccountsList: Ao2AccountSummary[] = useMemo(() => {
+    if (ao2Accounts.length > 0) {
+      return ao2Accounts;
+    }
+    const adminStaff = staffRecords.filter(
+      (s) => s.role === 'Administrative Officer' && Boolean(s.portalUsername)
+    );
+    if (adminStaff.length > 0) {
+      return adminStaff.map((s, idx) => ({
+        accountId: s.id,
+        username: s.portalUsername ?? ao2Account?.username ?? 'r.gabrito',
+        fullName: s.fullName,
+        title: s.title,
+        hasCustomPassword: ao2Account?.hasCustomPassword ?? false,
+        updatedAt: s.updatedAt,
+        isPrimary: idx === 0,
+      }));
+    }
+    if (!ao2Account) return [];
+    return [
+      {
+        accountId: 'staff-danlog-gabrito',
+        username: ao2Account.username,
+        fullName: ao2Account.username,
+        title: 'Administrative Officer II (AO-II)',
+        hasCustomPassword: ao2Account.hasCustomPassword,
+        updatedAt: ao2Account.updatedAt,
+        isPrimary: true,
+      },
+    ];
+  }, [ao2Accounts, ao2Account, staffRecords]);
+  const primaryAo2Account = useMemo(
+    () => ao2AdminAccountsList.find((a) => a.isPrimary) ?? ao2AdminAccountsList[0],
+    [ao2AdminAccountsList]
+  );
+  const ao2SignedInAccount = useMemo(() => {
+    if (!ao2Session) return primaryAo2Account;
+    return (
+      ao2AdminAccountsList.find(
+        (a) =>
+          (ao2Session.accountId && a.accountId === ao2Session.accountId) ||
+          a.username.toLowerCase() === ao2Session.username.toLowerCase()
+      ) ?? primaryAo2Account
+    );
+  }, [ao2Session, ao2AdminAccountsList, primaryAo2Account]);
+  const principalDisplayName = principalStaffRecord?.fullName ?? 'School Principal';
+  const principalRoleTitle = principalStaffRecord?.title ?? 'School Principal';
+  const ao2DisplayName =
+    ao2Session?.fullName || ao2SignedInAccount?.fullName || 'AO-II Administrator';
+
   useEffect(() => {
     setAccountDrafts((prev) => {
-      const next: Record<string, { username: string; newPassword: string }> = {};
+      const next: typeof prev = {};
       for (const acc of teacherAccounts) {
+        const staff = staffRecords.find((s) => s.id === acc.teacherId);
+        const base = TEACHER_PORTAL_PROFILES.find((t) => t.id === acc.teacherId);
         next[acc.teacherId] = {
           username: acc.username,
           newPassword: prev[acc.teacherId]?.newPassword ?? '',
+          fullName: staff?.fullName ?? base?.name ?? acc.username,
+          title: staff?.title ?? base?.title ?? 'Classroom Adviser',
+          department: staff?.department ?? base?.department ?? 'General Faculty',
+          assignedGradeId: staff?.assignedGradeId ?? base?.assignedGradeId ?? 'g1',
+          assignedGradeLabel:
+            staff?.assignedGradeLabel ?? base?.assignedGradeLabel ?? 'Primary Division',
+          room: staff?.room ?? base?.room ?? 'Main Building',
+          email: staff?.email ?? base?.email ?? '',
+          employmentStatus: staff?.employmentStatus ?? 'Regular / Permanent',
         };
       }
       return next;
     });
-  }, [teacherAccounts]);
+  }, [teacherAccounts, staffRecords]);
 
   useEffect(() => {
-    if (principalAccount) {
-      setPrincipalDraft((prev) => ({
-        username: principalAccount.username,
-        newPassword: prev.newPassword,
-      }));
-    }
-  }, [principalAccount]);
+    setPrincipalDraft((prev) => ({
+      username: principalAccount?.username ?? '',
+      newPassword: prev.newPassword,
+      fullName: principalStaffRecord?.fullName ?? '',
+      title: principalStaffRecord?.title ?? 'School Principal',
+    }));
+  }, [principalAccount, principalStaffRecord]);
 
   useEffect(() => {
-    if (ao2Account) {
-      setAo2OwnDraft((prev) => ({
-        username: ao2Account.username,
-        newPassword: prev.newPassword,
-      }));
+    setAo2AdminDrafts((prev) => {
+      const next: typeof prev = {};
+      for (const adm of ao2AdminAccountsList) {
+        const staff = staffRecords.find((s) => s.id === adm.accountId);
+        next[adm.accountId] = {
+          username: adm.username,
+          newPassword: prev[adm.accountId]?.newPassword ?? '',
+          fullName: staff?.fullName ?? adm.fullName,
+          title: staff?.title ?? adm.title,
+        };
+      }
+      return next;
+    });
+  }, [ao2AdminAccountsList, staffRecords]);
+
+  const mergedTeacherProfiles: TeacherProfile[] = useMemo(() => {
+    if (teacherAccounts.length === 0 && staffRecords.length === 0) {
+      return TEACHER_PORTAL_PROFILES;
     }
-  }, [ao2Account]);
+    const staffMap = new Map(staffRecords.map((s) => [s.id, s]));
+    const baseMap = new Map(TEACHER_PORTAL_PROFILES.map((t) => [t.id, t]));
+    return teacherAccounts.map((acc) => {
+      const staff = staffMap.get(acc.teacherId);
+      const base = baseMap.get(acc.teacherId);
+      const gradeLabel =
+        staff?.assignedGradeLabel ?? base?.assignedGradeLabel ?? 'Assigned Grade Class';
+      const room = staff?.room ?? base?.room ?? 'Main Building';
+      return {
+        id: acc.teacherId,
+        name: staff?.fullName ?? base?.name ?? acc.username,
+        title: staff?.title ?? base?.title ?? 'Classroom Adviser',
+        department: staff?.department ?? base?.department ?? 'General Faculty',
+        assignedGradeId: staff?.assignedGradeId ?? base?.assignedGradeId ?? 'g1',
+        assignedGradeLabel: gradeLabel,
+        email: staff?.email ?? base?.email ?? `${acc.username}@danloges.edu.ph`,
+        room,
+        officeHours:
+          staff?.officeHours ?? base?.officeHours ?? 'Mon–Fri · 3:00 p.m. – 4:00 p.m.',
+        students: base?.students ?? [],
+        assignments: base?.assignments ?? [],
+        submittedDocuments: base?.submittedDocuments ?? [],
+        schedule: base?.schedule ?? [
+          {
+            period: 'Block 1',
+            time: '7:45 – 9:30 a.m.',
+            course: gradeLabel,
+            room,
+            enrolled: 30,
+          },
+        ],
+        initialNotes: base?.initialNotes ?? [],
+      };
+    });
+  }, [teacherAccounts, staffRecords]);
 
   const activeTeacher: TeacherProfile | null = useMemo(
     () =>
       teacherSession
-        ? TEACHER_PORTAL_PROFILES.find((t) => t.id === teacherSession.teacherId) ?? null
+        ? mergedTeacherProfiles.find((t) => t.id === teacherSession.teacherId) ?? null
         : null,
-    [teacherSession]
+    [teacherSession, mergedTeacherProfiles]
   );
 
-  const currentStudents = activeTeacher ? rostersByTeacher[activeTeacher.id] ?? [] : [];
-  const currentStudentDocs = activeTeacher ? studentDocsByTeacher[activeTeacher.id] ?? [] : [];
+  const currentStudents = useMemo(() => {
+    if (!activeTeacher) return [];
+    const dbMatches = studentRecords.filter(
+      (s) =>
+        s.adviserId === activeTeacher.id ||
+        (activeTeacher.assignedGradeId && s.gradeId === activeTeacher.assignedGradeId)
+    );
+    if (dbMatches.length > 0) {
+      return dbMatches.map((s) => ({
+        id: s.id,
+        studentName: s.studentName,
+        gradeLabel: s.gradeLabel,
+        advisorGroup: s.section,
+        attendance: s.attendance,
+        currentAverage: s.currentAverage,
+        missingWork: s.missingWork,
+        isPersistedRecord: true,
+      }));
+    }
+    return (rostersByTeacher[activeTeacher.id] ?? []).map((s) => ({
+      ...s,
+      isPersistedRecord: false,
+    }));
+  }, [activeTeacher, studentRecords, rostersByTeacher]);
+  const currentStudentDocs = useMemo(() => {
+    if (!activeTeacher) return [];
+    const baseDocs = studentDocsByTeacher[activeTeacher.id] ?? [];
+    return baseDocs.map((doc) => {
+      const persisted = studentDocFeedback.find(
+        (f) => f.docId === doc.id && f.teacherId === activeTeacher.id
+      );
+      return persisted ? { ...doc, teacherComment: persisted.comment } : doc;
+    });
+  }, [activeTeacher, studentDocsByTeacher, studentDocFeedback]);
   const currentTeacherUploadedDocs = useMemo(
     () =>
       activeTeacher ? uploadedDocuments.filter((d) => d.teacherId === activeTeacher.id) : [],
     [uploadedDocuments, activeTeacher]
   );
-  const currentNotes = activeTeacher ? notesByTeacher[activeTeacher.id] ?? [] : [];
+  const currentNotes = useMemo(() => {
+    if (!activeTeacher) return [];
+    const persisted = teacherNotes.filter((n) => n.teacherId === activeTeacher.id);
+    if (persisted.length > 0) return persisted;
+    return notesByTeacher[activeTeacher.id] ?? [];
+  }, [activeTeacher, teacherNotes, notesByTeacher]);
 
   const filteredStudentDocs = useMemo(() => {
     if (docStatusFilter === 'All') return currentStudentDocs;
@@ -526,7 +956,11 @@ export function PortalWorkspace({
         (principalStatusFilter === 'Approved' &&
           doc.principalReviewStatus === 'Endorsed/Principal');
       const teacherName =
-        TEACHER_PORTAL_PROFILES.find((t) => t.id === doc.teacherId)?.name.toLowerCase() ?? '';
+        (
+          mergedTeacherProfiles.find((t) => t.id === doc.teacherId)?.name ??
+          staffRecords.find((s) => s.id === doc.teacherId)?.fullName ??
+          ''
+        ).toLowerCase();
       const matchesQuery =
         q.length === 0 ||
         doc.title.toLowerCase().includes(q) ||
@@ -542,6 +976,8 @@ export function PortalWorkspace({
     principalCategoryFilter,
     principalStatusFilter,
     principalSearch,
+    mergedTeacherProfiles,
+    staffRecords,
   ]);
 
   const inspectedPrincipalDoc = useMemo(
@@ -588,7 +1024,11 @@ export function PortalWorkspace({
       const matchesTeacher =
         ao2DocTeacherFilter === 'ALL' || doc.teacherId === ao2DocTeacherFilter;
       const teacherName =
-        TEACHER_PORTAL_PROFILES.find((t) => t.id === doc.teacherId)?.name.toLowerCase() ?? '';
+        (
+          mergedTeacherProfiles.find((t) => t.id === doc.teacherId)?.name ??
+          staffRecords.find((s) => s.id === doc.teacherId)?.fullName ??
+          ''
+        ).toLowerCase();
       const matchesQuery =
         q.length === 0 ||
         doc.title.toLowerCase().includes(q) ||
@@ -598,7 +1038,7 @@ export function PortalWorkspace({
         teacherName.includes(q);
       return matchesTeacher && matchesQuery;
     });
-  }, [ao2EndorsedDocs, ao2DocTeacherFilter, ao2DocSearch]);
+  }, [ao2EndorsedDocs, ao2DocTeacherFilter, ao2DocSearch, mergedTeacherProfiles, staffRecords]);
 
   const inspectedAo2Doc = useMemo(
     () =>
@@ -608,39 +1048,9 @@ export function PortalWorkspace({
     [ao2FilteredEndorsedDocs, selectedAo2DocId]
   );
 
-  const inventorySummary = useMemo(() => {
-    const totalEntries = inventoryItems.length;
-    const totalQty = inventoryItems.reduce((sum, item) => sum + item.quantity, 0);
-    const availableCount = inventoryItems.filter((item) => item.status === 'Available').length;
-    const issuedCount = inventoryItems.filter((item) => item.status === 'Issued').length;
-    const attentionCount = inventoryItems.filter(
-      (item) =>
-        item.status === 'Low Stock' ||
-        item.status === 'For Repair' ||
-        item.status === 'Condemned'
-    ).length;
-    return { totalEntries, totalQty, availableCount, issuedCount, attentionCount };
-  }, [inventoryItems]);
-
-  const filteredInventoryItems = useMemo(() => {
-    const q = inventorySearch.trim().toLowerCase();
-    return inventoryItems.filter((item) => {
-      const matchesStatus =
-        inventoryStatusFilter === 'ALL' || item.status === inventoryStatusFilter;
-      const matchesQuery =
-        q.length === 0 ||
-        item.itemName.toLowerCase().includes(q) ||
-        item.issuedToUser.toLowerCase().includes(q) ||
-        item.status.toLowerCase().includes(q) ||
-        item.dateReceived.toLowerCase().includes(q) ||
-        item.dateIssued.toLowerCase().includes(q);
-      return matchesStatus && matchesQuery;
-    });
-  }, [inventoryItems, inventorySearch, inventoryStatusFilter]);
-
   const handlePrintEndorsedDocument = (doc: UploadedCourseDocument) => {
     if (!ao2Session) return;
-    const author = TEACHER_PORTAL_PROFILES.find((t) => t.id === doc.teacherId);
+    const author = mergedTeacherProfiles.find((t) => t.id === doc.teacherId);
     const escapeHtml = (value: string) =>
       value
         .replace(/&/g, '&amp;')
@@ -717,10 +1127,10 @@ export function PortalWorkspace({
     }
     <div class="sig-grid">
       <div>
-        <div class="sig-line"><strong>${escapeHtml(doc.endorsedBy ?? 'Dr. Elena Vance')}</strong><br/>School Principal · Endorsed/Principal</div>
+        <div class="sig-line"><strong>${escapeHtml(doc.endorsedBy ?? principalDisplayName)}</strong><br/>${escapeHtml(principalRoleTitle)} · Endorsed/Principal</div>
       </div>
       <div>
-        <div class="sig-line"><strong>Administrative Officer II (AO-II)</strong><br/>Recorded &amp; Printed by @${escapeHtml(ao2Session.username)}</div>
+        <div class="sig-line"><strong>${escapeHtml(ao2DisplayName)}</strong><br/>Recorded &amp; Printed by @${escapeHtml(ao2Session.username)}</div>
       </div>
     </div>
   </body>
@@ -764,198 +1174,6 @@ export function PortalWorkspace({
       }, 300);
     };
     document.body.appendChild(iframe);
-  };
-
-  const handlePrintInventoryList = () => {
-    if (!ao2Session) return;
-    const escapeHtml = (value: string) =>
-      value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-
-    const rowsHtml = filteredInventoryItems
-      .map(
-        (item, idx) => `
-          <tr>
-            <td>${idx + 1}</td>
-            <td><strong>${escapeHtml(item.itemName)}</strong></td>
-            <td style="text-align:right;">${item.quantity}</td>
-            <td>${escapeHtml(item.status)}</td>
-            <td>${escapeHtml(item.dateReceived)}</td>
-            <td>${escapeHtml(item.issuedToUser)}</td>
-            <td>${escapeHtml(item.dateIssued)}</td>
-          </tr>`
-      )
-      .join('');
-
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    document.body.appendChild(iframe);
-
-    const printableHtml = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>School Inventory List — ${escapeHtml(frontendConfig.schoolName)}</title>
-    <style>
-      body { font-family: Arial, Helvetica, sans-serif; color: #111315; margin: 28px; font-size: 12px; }
-      .header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #15803D; padding-bottom: 12px; margin-bottom: 16px; }
-      .school { font-size: 16px; font-weight: 700; margin: 0 0 4px 0; }
-      .sub { font-size: 11px; color: #525866; margin: 0; }
-      table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-      th, td { border: 1px solid #DCE0E6; padding: 7px 9px; text-align: left; font-size: 11.5px; }
-      th { background: #F8F9FA; font-weight: 700; color: #111315; }
-      .footer { margin-top: 28px; display: flex; justify-content: space-between; font-size: 11px; color: #525866; }
-      @media print { body { margin: 16px; } }
-    </style>
-  </head>
-  <body>
-    <div class="header">
-      <div>
-        <p class="school">${escapeHtml(frontendConfig.schoolName)} — School Inventory List</p>
-        <p class="sub">${escapeHtml(frontendConfig.campusAddress)} · SY ${escapeHtml(
-      backendConfig.activeAcademicYear
-    )}</p>
-      </div>
-      <div class="sub">Records Shown: ${filteredInventoryItems.length} · Total Units: ${filteredInventoryItems.reduce(
-      (s, i) => s + i.quantity,
-      0
-    )}</div>
-    </div>
-    <table>
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Name of Item</th>
-          <th style="text-align:right;">Qty</th>
-          <th>Status</th>
-          <th>Date Received</th>
-          <th>User</th>
-          <th>Date Issued</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rowsHtml || '<tr><td colspan="7" style="text-align:center;">No inventory items found.</td></tr>'}
-      </tbody>
-    </table>
-    <div class="footer">
-      <div>Prepared by AO-II (@${escapeHtml(ao2Session.username)})</div>
-      <div>Printed ${escapeHtml(new Date().toLocaleString('en-US'))}</div>
-    </div>
-  </body>
-</html>`;
-
-    const docRef = iframe.contentWindow?.document;
-    if (!docRef) return;
-    docRef.open();
-    docRef.write(printableHtml);
-    docRef.close();
-
-    window.setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-      window.setTimeout(() => {
-        iframe.remove();
-      }, 1500);
-    }, 300);
-  };
-
-  const handleCreateInventoryItem = async (e: FormEvent) => {
-    e.preventDefault();
-    setAo2SaveMessage('');
-    setAo2ErrorMessage('');
-    const qtyNum = Number(newInvQty);
-    if (newInvName.trim().length < 2) {
-      setAo2ErrorMessage('Enter an item name of at least 2 characters.');
-      return;
-    }
-    if (!Number.isFinite(qtyNum) || qtyNum < 0) {
-      setAo2ErrorMessage('Quantity must be 0 or greater.');
-      return;
-    }
-    if (!newInvDateReceived.trim()) {
-      setAo2ErrorMessage('Date received is required.');
-      return;
-    }
-
-    setIsSavingInventory(true);
-    const result = await onAo2AddInventoryItem({
-      itemName: newInvName.trim(),
-      quantity: Math.round(qtyNum),
-      status: newInvStatus,
-      dateReceived: newInvDateReceived.trim(),
-      issuedToUser: newInvUser.trim() || 'Supply Room / Unassigned',
-      dateIssued: newInvDateIssued.trim() || '—',
-    });
-    setIsSavingInventory(false);
-
-    if (!result.ok) {
-      setAo2ErrorMessage(result.error || 'Could not add inventory item.');
-      return;
-    }
-
-    setNewInvName('');
-    setNewInvQty('1');
-    setNewInvStatus('Available');
-    setNewInvUser('');
-    setNewInvDateIssued('');
-    setShowAddInventoryForm(false);
-    setAo2SaveMessage('Added new inventory item to AO-II School Property records.');
-  };
-
-  const handleStartEditInventory = (item: InventoryItem) => {
-    setAo2SaveMessage('');
-    setAo2ErrorMessage('');
-    setEditingInventoryId(item.id);
-    setEditInvDraft({
-      itemName: item.itemName,
-      quantity: item.quantity,
-      status: item.status,
-      dateReceived: item.dateReceived,
-      issuedToUser: item.issuedToUser,
-      dateIssued: item.dateIssued === '—' ? '' : item.dateIssued,
-    });
-  };
-
-  const handleSaveEditInventory = async (id: string) => {
-    setAo2SaveMessage('');
-    setAo2ErrorMessage('');
-    setIsSavingInventory(true);
-    const result = await onAo2UpdateInventoryItem(id, {
-      ...editInvDraft,
-      itemName: editInvDraft.itemName.trim(),
-      quantity: Math.max(0, Math.round(Number(editInvDraft.quantity) || 0)),
-      issuedToUser: editInvDraft.issuedToUser.trim() || 'Supply Room / Unassigned',
-      dateIssued: editInvDraft.dateIssued.trim() || '—',
-    });
-    setIsSavingInventory(false);
-    if (!result.ok) {
-      setAo2ErrorMessage(result.error || 'Could not update inventory item.');
-      return;
-    }
-    setEditingInventoryId(null);
-    setAo2SaveMessage('Updated inventory item record.');
-  };
-
-  const handleDeleteInventory = async (id: string) => {
-    setAo2SaveMessage('');
-    setAo2ErrorMessage('');
-    const result = await onAo2DeleteInventoryItem(id);
-    if (!result.ok) {
-      setAo2ErrorMessage(result.error || 'Could not remove inventory item.');
-      return;
-    }
-    if (editingInventoryId === id) {
-      setEditingInventoryId(null);
-    }
-    setAo2SaveMessage('Removed inventory item from AO-II records.');
   };
 
   const handlePrincipalReviewAction = async (
@@ -1034,23 +1252,31 @@ export function PortalWorkspace({
     setPassChangeSuccess('Your personal teacher password has been updated.');
   };
 
-  const handleSaveStudentDocFeedback = (docId: string) => {
+  const handleSaveStudentDocFeedback = async (docId: string) => {
     if (!activeTeacher || !studentDocCommentDraft.trim()) return;
+    const comment = studentDocCommentDraft.trim();
     setStudentDocsByTeacher((prev) => ({
       ...prev,
       [activeTeacher.id]: (prev[activeTeacher.id] ?? []).map((doc) =>
         doc.id === docId
           ? {
               ...doc,
-              teacherComment: studentDocCommentDraft.trim(),
+              teacherComment: comment,
             }
           : doc
       ),
     }));
     setStudentDocCommentDraft('');
+    if (onSaveStudentDocFeedback) {
+      await onSaveStudentDocFeedback(docId, activeTeacher.id, comment);
+    }
   };
 
-  const handleAttendanceToggle = (studentId: string, status: AttendanceStatus) => {
+  const handleAttendanceToggle = (
+    studentId: string,
+    status: AttendanceStatus,
+    _isPersistedRecord?: boolean
+  ) => {
     if (!activeTeacher) return;
     setRostersByTeacher((prev) => ({
       ...prev,
@@ -1058,6 +1284,7 @@ export function PortalWorkspace({
         s.id === studentId ? { ...s, attendance: status } : s
       ),
     }));
+    void onUpdateStudentAttendance(studentId, status);
   };
 
   const handleFileChosen = (file: File | null) => {
@@ -1137,17 +1364,22 @@ export function PortalWorkspace({
     setUploadSuccess('Document uploaded and synced to both your dashboard and the Principal archive.');
   };
 
-  const handleAddNote = (e: FormEvent) => {
+  const handleAddNote = async (e: FormEvent) => {
     e.preventDefault();
     if (!activeTeacher || newAdvisoryNote.trim().length < 3) return;
+    const text = newAdvisoryNote.trim();
+    setNewAdvisoryNote('');
+    if (onAddTeacherNote) {
+      const res = await onAddTeacherNote(activeTeacher.id, text);
+      if (res.ok) return;
+    }
     setNotesByTeacher((prev) => ({
       ...prev,
       [activeTeacher.id]: [
-        { id: `note-${Date.now()}`, timestamp: 'Just now', text: newAdvisoryNote.trim() },
+        { id: `note-${Date.now()}`, timestamp: 'Just now', text },
         ...(prev[activeTeacher.id] ?? []),
       ],
     }));
-    setNewAdvisoryNote('');
   };
 
   const handleSaveFrontend = async (e: FormEvent) => {
@@ -1435,10 +1667,11 @@ export function PortalWorkspace({
                   </div>
 
                   <div className="divide-y divide-[#E2E5E9] border-t border-b border-[#E2E5E9]">
-                    {TEACHER_PORTAL_PROFILES.map((t) => {
+                    {mergedTeacherProfiles.map((t) => {
                       const account = teacherAccounts.find((a) => a.teacherId === t.id);
                       const username = account?.username ?? t.email.split('@')[0];
-                      const defaultPass = DEFAULT_FACULTY_PASSWORDS[t.id];
+                      const defaultPass =
+                        DEFAULT_FACULTY_PASSWORDS[t.id] ?? DEFAULT_GENERIC_FACULTY_PASSWORD;
                       const canPrefillDefault = !account?.hasCustomPassword && Boolean(defaultPass);
 
                       return (
@@ -1519,34 +1752,63 @@ export function PortalWorkspace({
                   </button>
                 </div>
 
-                {/* KPI Strip */}
+                {/* Interactive Teacher KPI Strip */}
                 <div className="grid grid-cols-2 lg:grid-cols-4 border-b border-[#DCE6E0] divide-y sm:divide-y-0 sm:divide-x divide-[#DCE6E0]">
-                  <div className="p-5 space-y-1 bg-[#F0FDF4]/85">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTeacherTab('submitted');
+                      setDocStatusFilter('Pending Review');
+                    }}
+                    className={`text-left p-5 space-y-1 bg-[#F0FDF4]/85 hover:bg-[#DCFCE7]/70 transition-colors cursor-pointer ${
+                      teacherTab === 'submitted' && docStatusFilter === 'Pending Review'
+                        ? 'ring-2 ring-inset ring-[#15803D]/35'
+                        : ''
+                    }`}
+                  >
                     <div className="text-xs font-medium text-[#166534]">Student Docs Pending Review</div>
                     <div className="font-display text-2xl font-semibold text-[#15803D] tabular-nums">
                       {teacherKpis.pendingStudentDocs}
                     </div>
-                  </div>
-                  <div className="p-5 space-y-1 bg-[#EFF6FF]/85">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTeacherTab('upload')}
+                    className={`text-left p-5 space-y-1 bg-[#EFF6FF]/85 hover:bg-[#DBEAFE]/70 transition-colors cursor-pointer ${
+                      teacherTab === 'upload' ? 'ring-2 ring-inset ring-[#1D4ED8]/35' : ''
+                    }`}
+                  >
                     <div className="text-xs font-medium text-[#1E40AF]">My Uploaded Documents</div>
                     <div className="font-display text-2xl font-semibold text-[#1D4ED8] tabular-nums">
                       {teacherKpis.uploadedCount}
                     </div>
-                  </div>
-                  <div className="p-5 space-y-1 bg-[#F0FDFA]/85">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTeacherTab('roster')}
+                    className={`text-left p-5 space-y-1 bg-[#F0FDFA]/85 hover:bg-[#CCFBF1]/70 transition-colors cursor-pointer ${
+                      teacherTab === 'roster' ? 'ring-2 ring-inset ring-[#0F766E]/35' : ''
+                    }`}
+                  >
                     <div className="text-xs font-medium text-[#115E59]">Attendance Present Today</div>
                     <div className="font-display text-2xl font-semibold text-[#0F766E] tabular-nums">
                       {teacherKpis.presentCount} / {teacherKpis.studentCount}
                     </div>
-                  </div>
-                  <div className="p-5 space-y-1 bg-[#FFFBEB]/85">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTeacherTab('requisitions')}
+                    className={`text-left p-5 space-y-1 bg-[#FFFBEB]/85 hover:bg-[#FEF3C7]/70 transition-colors cursor-pointer ${
+                      teacherTab === 'requisitions' ? 'ring-2 ring-inset ring-[#B45309]/35' : ''
+                    }`}
+                  >
                     <div className="text-xs font-medium text-[#92400E]">Upload Policy Limit</div>
                     <div className="font-display text-2xl font-semibold text-[#B45309] tabular-nums">
                       {backendConfig.teacherUploadsEnabled
                         ? `${backendConfig.maxUploadSizeMb} MB`
                         : 'Paused'}
                     </div>
-                  </div>
+                  </button>
                 </div>
 
                 {/* Teacher Tabs */}
@@ -1564,7 +1826,23 @@ export function PortalWorkspace({
                       id: 'roster' as TeacherTab,
                       label: `Class Roster & Attendance (${currentStudents.length})`,
                     },
-                    { id: 'schedule' as TeacherTab, label: 'Schedule & Notes' },
+                    {
+                      id: 'schedule' as TeacherTab,
+                      label: 'Schedule & Notes',
+                    },
+                    {
+                      id: 'requisitions' as TeacherTab,
+                      label: `Material Requisition (${
+                        materialRequisitions.filter((r) => r.teacherId === activeTeacher.id).length
+                      })`,
+                    },
+                    {
+                      id: 'leave' as TeacherTab,
+                      label: `Leave Application (${
+                        leaveApplications.filter((l) => l.applicantAccountId === activeTeacher.id).length
+                      })`,
+                    },
+                    { id: 'posts' as TeacherTab, label: 'Website Posts' },
                     { id: 'security' as TeacherTab, label: 'Account & Password' },
                   ].map((tab) => {
                     const active = teacherTab === tab.id;
@@ -2020,14 +2298,10 @@ export function PortalWorkspace({
                                   )}
                                 </div>
 
-                                <button
-                                  type="button"
-                                  onClick={() => void onDeleteUploadedDocument(doc.id)}
-                                  aria-label={`Remove ${doc.title}`}
-                                  className="p-2 text-[#525866] hover:text-[#B91C1C] rounded-lg cursor-pointer shrink-0"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#525866] bg-[#F8FAFC] border border-[#E2E5E9] px-2.5 py-1 rounded-md shrink-0">
+                                  <Lock className="w-3 h-3 text-[#047857]" />
+                                  <span>Saved in DB</span>
+                                </span>
                               </div>
                             ))}
                           </div>
@@ -2085,11 +2359,17 @@ export function PortalWorkspace({
                                   <div className="inline-flex gap-1 p-0.5 bg-[#F2F4F6] rounded-md border border-[#E2E5E9]">
                                     {(['Present', 'Late', 'Absent'] as AttendanceStatus[]).map(
                                       (st) => (
-                                        <button
-                                          key={st}
-                                          type="button"
-                                          onClick={() => handleAttendanceToggle(student.id, st)}
-                                          className={`px-2.5 py-1 text-[11px] font-medium rounded cursor-pointer ${
+                                          <button
+                                            key={st}
+                                            type="button"
+                                            onClick={() =>
+                                              handleAttendanceToggle(
+                                                student.id,
+                                                st,
+                                                student.isPersistedRecord
+                                              )
+                                            }
+                                            className={`px-2.5 py-1 text-[11px] font-medium rounded cursor-pointer ${
                                             student.attendance === st
                                               ? st === 'Present'
                                                 ? 'bg-[#047857] text-white'
@@ -2175,7 +2455,56 @@ export function PortalWorkspace({
                     </div>
                   )}
 
-                  {/* TEACHER TAB 5: ACCOUNT & PASSWORD */}
+                  {/* TEACHER TAB 5: MATERIAL REQUISITION & POSSESSED MATERIALS */}
+                  {teacherTab === 'requisitions' && (
+                    <TeacherMaterialRequisitionView
+                      accentColor={frontendConfig.accentColor}
+                      teacher={{
+                        id: activeTeacher.id,
+                        name: activeTeacher.name,
+                        assignedGradeLabel: activeTeacher.assignedGradeLabel,
+                        room: activeTeacher.room,
+                      }}
+                      inventoryItems={inventoryItems}
+                      requisitions={materialRequisitions}
+                      onCreateRequisition={onTeacherCreateRequisition}
+                      onDeleteRequisition={onTeacherDeleteRequisition}
+                    />
+                  )}
+
+                  {/* TEACHER TAB 5b: LEAVE APPLICATION FORM */}
+                  {teacherTab === 'leave' && (
+                    <LeaveApplicationWorkspace
+                      mode="teacher"
+                      accentColor={frontendConfig.accentColor}
+                      actorAccountId={activeTeacher.id}
+                      actorRole="Teacher"
+                      actorName={activeTeacher.name}
+                      actorDepartmentOrGrade={activeTeacher.assignedGradeLabel}
+                      leaveApplications={leaveApplications}
+                      onSubmitLeaveApplication={(payload) =>
+                        onSubmitLeaveApplication('Teacher', payload)
+                      }
+                    />
+                  )}
+
+                  {/* TEACHER TAB 6: WEBSITE POSTS & STUDENT ACTIVITIES */}
+                  {teacherTab === 'posts' && (
+                    <PortalPostPublisher
+                      accentColor={frontendConfig.accentColor}
+                      actorName={activeTeacher.name}
+                      actorRole="Teacher"
+                      actorAccountId={activeTeacher.id}
+                      homePosts={homePosts}
+                      activityPosts={activityPosts}
+                      onCreateHomePost={onCreateHomePost}
+                      onDeleteHomePost={onDeleteHomePost}
+                      onCreateActivityPost={onCreateActivityPost}
+                      onDeleteActivityPost={onDeleteActivityPost}
+                    />
+                  )}
+
+                  {/* TEACHER TAB 6: ACCOUNT & PASSWORD */}
                   {teacherTab === 'security' && (
                     <div className="max-w-xl bg-white rounded-xl border border-[#E2E5E9] p-6 space-y-5">
                       <div className="space-y-1">
@@ -2316,7 +2645,11 @@ export function PortalWorkspace({
                           setPrincipalUsernameInput(e.target.value);
                           setPrincipalLoginError('');
                         }}
-                        placeholder="e.g., principal.vance"
+                        placeholder={
+                          principalAccount?.username
+                            ? `e.g., ${principalAccount.username}`
+                            : 'Enter Principal username'
+                        }
                         className="w-full px-3.5 py-2.5 text-sm font-mono rounded-lg border border-[#DCE0E6] bg-white text-[#111315]"
                       />
                     </div>
@@ -2368,7 +2701,7 @@ export function PortalWorkspace({
 
                     <button
                       type="submit"
-                      disabled={isPrincipalSigningIn}
+                      disabled={isPrincipalSigningIn || !principalAccount}
                       style={{ backgroundColor: frontendConfig.accentColor }}
                       className="w-full py-2.5 px-4 text-sm font-semibold text-white rounded-lg cursor-pointer disabled:opacity-60"
                     >
@@ -2385,49 +2718,55 @@ export function PortalWorkspace({
                       Principal Credential Reference
                     </div>
                     <h4 className="font-display text-xl font-semibold text-[#111315]">
-                      Dr. Elena Vance — School Principal
+                      {principalAccount
+                        ? `${principalDisplayName} — ${principalRoleTitle}`
+                        : 'No Principal Account Assigned'}
                     </h4>
                     <p className="text-xs text-[#525866]">
-                      Privileged oversight access across all teacher-submitted files, endorsements,
-                      and curriculum follow-ups.
+                      {principalAccount
+                        ? 'Privileged oversight access across all teacher-submitted files, endorsements, and curriculum follow-ups.'
+                        : 'The previous placeholder Principal account was removed. An AO-II Administrator can add a School Principal account from AO-II Admin Console → Staff & Portal Accounts.'}
                     </p>
                   </div>
 
-                  <div className="p-4 rounded-xl border border-[#E2E5E9] bg-[#F8F9FA] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="space-y-1 text-xs font-mono">
-                      <div className="text-[#111315]">
-                        Username:{' '}
-                        <strong>{principalAccount?.username ?? 'principal.vance'}</strong>
+                  {principalAccount ? (
+                    <div className="p-4 rounded-xl border border-[#E2E5E9] bg-[#F8F9FA] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="space-y-1 text-xs font-mono">
+                        <div className="text-[#111315]">
+                          Username: <strong>{principalAccount.username}</strong>
+                        </div>
+                        <div className="text-[#525866]">
+                          Password:{' '}
+                          {!principalAccount.hasCustomPassword ? (
+                            <strong className="text-[#111315]">{DEFAULT_PRINCIPAL_PASSWORD}</strong>
+                          ) : (
+                            <span className="italic">Custom password set</span>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-[#525866]">
-                        Password:{' '}
-                        {!principalAccount?.hasCustomPassword ? (
-                          <strong className="text-[#111315]">{DEFAULT_PRINCIPAL_PASSWORD}</strong>
-                        ) : (
-                          <span className="italic">Custom password set</span>
-                        )}
-                      </div>
-                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPrincipalUsernameInput(
-                          principalAccount?.username ?? 'principal.vance'
-                        );
-                        if (!principalAccount?.hasCustomPassword) {
-                          setPrincipalPasswordInput(DEFAULT_PRINCIPAL_PASSWORD);
-                        } else {
-                          setPrincipalPasswordInput('');
-                        }
-                        setPrincipalLoginError('');
-                      }}
-                      style={{ color: frontendConfig.accentColor }}
-                      className="px-3 py-1.5 text-xs font-semibold bg-white hover:bg-[#EAEDF1] border border-[#DCE0E6] rounded-lg cursor-pointer shrink-0 self-start sm:self-center"
-                    >
-                      {!principalAccount?.hasCustomPassword ? 'Fill Credentials' : 'Fill Username'}
-                    </button>
-                  </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPrincipalUsernameInput(principalAccount.username);
+                          if (!principalAccount.hasCustomPassword) {
+                            setPrincipalPasswordInput(DEFAULT_PRINCIPAL_PASSWORD);
+                          } else {
+                            setPrincipalPasswordInput('');
+                          }
+                          setPrincipalLoginError('');
+                        }}
+                        style={{ color: frontendConfig.accentColor }}
+                        className="px-3 py-1.5 text-xs font-semibold bg-white hover:bg-[#EAEDF1] border border-[#DCE0E6] rounded-lg cursor-pointer shrink-0 self-start sm:self-center"
+                      >
+                        {!principalAccount.hasCustomPassword ? 'Fill Credentials' : 'Fill Username'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="p-4 rounded-xl border border-[#E2E5E9] bg-[#F8F9FA] text-xs text-[#525866]">
+                      Principal portal login is currently inactive until a Principal account is added by AO-II.
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -2445,7 +2784,7 @@ export function PortalWorkspace({
                       </span>
                     </div>
                     <h3 className="font-display text-2xl font-semibold text-[#172554]">
-                      Dr. Elena Vance — School Principal
+                      {principalDisplayName} — {principalRoleTitle}
                     </h3>
                     <p className="text-xs text-[#475569]">
                       Inspect, endorse, or request revisions on all syllabi, lab protocols,
@@ -2463,15 +2802,37 @@ export function PortalWorkspace({
                   </button>
                 </div>
 
-                {/* Principal Cross-Faculty KPIs */}
+                {/* Interactive Principal Cross-Faculty KPIs */}
                 <div className="grid grid-cols-2 lg:grid-cols-4 border-b border-[#DCE4F0] divide-y sm:divide-y-0 sm:divide-x divide-[#DCE4F0]">
-                  <div className="p-5 space-y-1 bg-[#F8FAFC]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPrincipalTab('documents');
+                      setPrincipalStatusFilter('ALL');
+                    }}
+                    className={`text-left p-5 space-y-1 bg-[#F8FAFC] hover:bg-[#F1F5F9] transition-colors cursor-pointer ${
+                      principalTab === 'documents' && principalStatusFilter === 'ALL'
+                        ? 'ring-2 ring-inset ring-[#0F172A]/20'
+                        : ''
+                    }`}
+                  >
                     <div className="text-xs font-medium text-[#334155]">Total Teacher Documents</div>
                     <div className="font-display text-2xl font-semibold text-[#0F172A] tabular-nums">
                       {uploadedDocuments.length}
                     </div>
-                  </div>
-                  <div className="p-5 space-y-1 bg-[#EFF6FF]/85">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPrincipalTab('documents');
+                      setPrincipalStatusFilter('Pending Review');
+                    }}
+                    className={`text-left p-5 space-y-1 bg-[#EFF6FF]/85 hover:bg-[#DBEAFE]/70 transition-colors cursor-pointer ${
+                      principalTab === 'documents' && principalStatusFilter === 'Pending Review'
+                        ? 'ring-2 ring-inset ring-[#1D4ED8]/35'
+                        : ''
+                    }`}
+                  >
                     <div className="text-xs font-medium text-[#1E40AF]">Pending Review</div>
                     <div className="font-display text-2xl font-semibold text-[#1D4ED8] tabular-nums">
                       {
@@ -2479,14 +2840,36 @@ export function PortalWorkspace({
                           .length
                       }
                     </div>
-                  </div>
-                  <div className="p-5 space-y-1 bg-[#ECFDF5]/85">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPrincipalTab('documents');
+                      setPrincipalStatusFilter('Approved');
+                    }}
+                    className={`text-left p-5 space-y-1 bg-[#ECFDF5]/85 hover:bg-[#DCFCE7]/70 transition-colors cursor-pointer ${
+                      principalTab === 'documents' && principalStatusFilter === 'Approved'
+                        ? 'ring-2 ring-inset ring-[#047857]/35'
+                        : ''
+                    }`}
+                  >
                     <div className="text-xs font-medium text-[#065F46]">Approved</div>
                     <div className="font-display text-2xl font-semibold text-[#047857] tabular-nums">
                       {ao2EndorsedDocs.length}
                     </div>
-                  </div>
-                  <div className="p-5 space-y-1 bg-[#FFFBEB]/85">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPrincipalTab('documents');
+                      setPrincipalStatusFilter('Needs Revision');
+                    }}
+                    className={`text-left p-5 space-y-1 bg-[#FFFBEB]/85 hover:bg-[#FEF3C7]/70 transition-colors cursor-pointer ${
+                      principalTab === 'documents' && principalStatusFilter === 'Needs Revision'
+                        ? 'ring-2 ring-inset ring-[#B45309]/35'
+                        : ''
+                    }`}
+                  >
                     <div className="text-xs font-medium text-[#92400E]">Needs Revision</div>
                     <div className="font-display text-2xl font-semibold text-[#B45309] tabular-nums">
                       {
@@ -2494,45 +2877,114 @@ export function PortalWorkspace({
                           .length
                       }
                     </div>
-                  </div>
+                  </button>
                 </div>
 
                 {/* Principal Navigation Tabs */}
-                <div className="px-6 pt-4 border-b border-[#E2E5E9] bg-white flex flex-wrap gap-2">
-                  {[
-                    {
-                      id: 'documents' as PrincipalTab,
-                      label: `All Teacher Documents (${uploadedDocuments.length})`,
-                    },
-                    { id: 'security' as PrincipalTab, label: 'Account & Password' },
-                  ].map((tab) => {
-                    const active = principalTab === tab.id;
-                    return (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setPrincipalTab(tab.id)}
-                        style={
-                          active
-                            ? {
-                                borderBottomColor: frontendConfig.accentColor,
-                                color: frontendConfig.accentColor,
-                              }
-                            : undefined
-                        }
-                        className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                          active
-                            ? ''
-                            : 'border-transparent text-[#525866] hover:text-[#111315]'
-                        }`}
-                      >
-                        {tab.label}
-                      </button>
-                    );
-                  })}
+                <div className="px-6 pt-4 border-b border-[#E2E5E9] bg-white flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      {
+                        id: 'documents' as PrincipalTab,
+                        label: `All Teacher Documents (${uploadedDocuments.length})`,
+                      },
+                      {
+                        id: 'requisitions' as PrincipalTab,
+                        label: `Material Requisitions (${
+                          materialRequisitions.filter((r) => r.ao2Status === 'Endorsed').length
+                        })`,
+                      },
+                      {
+                        id: 'leave' as PrincipalTab,
+                        label: `Leave Applications (${
+                          leaveApplications.filter(
+                            (l) =>
+                              l.ao2EndorsementStatus === 'Endorsed' &&
+                              l.principalStatus === 'Pending'
+                          ).length
+                        } Pending)`,
+                      },
+                      { id: 'posts' as PrincipalTab, label: 'Website Posts' },
+                      { id: 'security' as PrincipalTab, label: 'Account & Password' },
+                    ].map((tab) => {
+                      const active = principalTab === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setPrincipalTab(tab.id)}
+                          style={
+                            active
+                              ? {
+                                  borderBottomColor: frontendConfig.accentColor,
+                                  color: frontendConfig.accentColor,
+                                }
+                              : undefined
+                          }
+                          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                            active
+                              ? ''
+                              : 'border-transparent text-[#525866] hover:text-[#111315]'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => onOpenInventoryPage('principal')}
+                      className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold border-b-2 border-transparent text-[#0B291E] hover:text-[#15803D] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      <Package className="w-3.5 h-3.5" />
+                      <span>Inventory ({inventoryItems.length})</span>
+                      <ArrowUpRight className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
 
-                {principalTab === 'security' ? (
+                {principalTab === 'requisitions' ? (
+                  <div className="p-6">
+                    <PrincipalMaterialRequisitionView
+                      accentColor={frontendConfig.accentColor}
+                      requisitions={materialRequisitions}
+                      onReviewRequisition={onPrincipalReviewRequisition}
+                    />
+                  </div>
+                ) : principalTab === 'leave' ? (
+                  <div className="p-6">
+                    <LeaveApplicationWorkspace
+                      mode="principal"
+                      accentColor={frontendConfig.accentColor}
+                      actorAccountId={principalStaffRecord?.id ?? 'staff-principal'}
+                      actorRole="Principal"
+                      actorName={principalDisplayName}
+                      actorDepartmentOrGrade={
+                        principalStaffRecord?.department ?? 'Office of the School Principal'
+                      }
+                      leaveApplications={leaveApplications}
+                      onSubmitLeaveApplication={(payload) =>
+                        onSubmitLeaveApplication('Principal', payload)
+                      }
+                      onPrincipalDecideLeave={onPrincipalDecideLeave}
+                    />
+                  </div>
+                ) : principalTab === 'posts' ? (
+                  <div className="p-6">
+                    <PortalPostPublisher
+                      accentColor={frontendConfig.accentColor}
+                      actorName={principalDisplayName}
+                      actorRole="Principal"
+                      actorAccountId={principalStaffRecord?.id ?? 'staff-principal'}
+                      homePosts={homePosts}
+                      activityPosts={activityPosts}
+                      onCreateHomePost={onCreateHomePost}
+                      onDeleteHomePost={onDeleteHomePost}
+                      onCreateActivityPost={onCreateActivityPost}
+                      onDeleteActivityPost={onDeleteActivityPost}
+                    />
+                  </div>
+                ) : principalTab === 'security' ? (
                   <div className="p-6">
                     <div className="max-w-xl bg-white rounded-xl border border-[#E2E5E9] p-6 space-y-5">
                       <div className="space-y-1">
@@ -2623,7 +3075,7 @@ export function PortalWorkspace({
                         className="px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA] text-[#111315]"
                       >
                         <option value="ALL">All Teachers ({uploadedDocuments.length})</option>
-                        {TEACHER_PORTAL_PROFILES.map((t) => (
+                        {mergedTeacherProfiles.map((t) => (
                           <option key={t.id} value={t.id}>
                             {t.name}
                           </option>
@@ -2696,7 +3148,7 @@ export function PortalWorkspace({
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                       <div className="lg:col-span-5 bg-white rounded-xl border border-[#E2E5E9] divide-y divide-[#E2E5E9]">
                         {principalFilteredDocs.map((doc) => {
-                          const teacher = TEACHER_PORTAL_PROFILES.find(
+                          const teacher = mergedTeacherProfiles.find(
                             (t) => t.id === doc.teacherId
                           );
                           const isSelected = inspectedPrincipalDoc?.id === doc.id;
@@ -2764,7 +3216,7 @@ export function PortalWorkspace({
                       {inspectedPrincipalDoc && (
                         <div className="lg:col-span-7 bg-white rounded-xl border border-[#E2E5E9] p-6 space-y-5">
                           {(() => {
-                            const author = TEACHER_PORTAL_PROFILES.find(
+                            const author = mergedTeacherProfiles.find(
                               (t) => t.id === inspectedPrincipalDoc.teacherId
                             );
                             const fileExt = inspectedPrincipalDoc.fileName
@@ -3234,7 +3686,7 @@ export function PortalWorkspace({
                         htmlFor="ao2-username-login"
                         className="block text-xs font-semibold text-[#111315] mb-1.5"
                       >
-                        AO-II Username
+                        Administrator Username
                       </label>
                       <input
                         id="ao2-username-login"
@@ -3245,7 +3697,7 @@ export function PortalWorkspace({
                           setAo2UsernameInput(e.target.value);
                           setAo2LoginError('');
                         }}
-                        placeholder="e.g., ao2.admin"
+                        placeholder={`e.g., ${primaryAo2Account?.username ?? 'r.gabrito'}`}
                         className="w-full px-3.5 py-2.5 text-sm font-mono rounded-lg border border-[#DCE0E6] bg-white text-[#111315]"
                       />
                     </div>
@@ -3312,45 +3764,76 @@ export function PortalWorkspace({
                       AO-II Administrator Credential Reference
                     </div>
                     <h4 className="font-display text-xl font-semibold text-[#111315]">
-                      Administrative Officer II (AO-II)
+                      {primaryAo2Account?.fullName ?? 'AO-II Administrator'}
                     </h4>
                     <p className="text-xs text-[#525866]">
-                      Full authority over public site front-end appearance, back-end limits,
-                      enrollment capacities, and all portal accounts.
+                      {primaryAo2Account?.title ?? 'Administrative Officer II (AO-II)'} · Full
+                      authority over public site front-end appearance, back-end limits, enrollment
+                      capacities, and all portal accounts.
                     </p>
                   </div>
 
-                  <div className="p-4 rounded-xl border border-[#E2E5E9] bg-[#F8F9FA] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="space-y-1 text-xs font-mono">
-                      <div className="text-[#111315]">
-                        Username: <strong>{ao2Account?.username ?? 'ao2.admin'}</strong>
-                      </div>
-                      <div className="text-[#525866]">
-                        Password:{' '}
-                        {!ao2Account?.hasCustomPassword ? (
-                          <strong className="text-[#111315]">{DEFAULT_AO2_PASSWORD}</strong>
-                        ) : (
-                          <span className="italic">Custom password set</span>
-                        )}
-                      </div>
-                    </div>
+                  <div className="space-y-2.5">
+                    {ao2AdminAccountsList.map((adm) => {
+                      const isPrimary =
+                        adm.accountId === primaryAo2Account?.accountId || Boolean(adm.isPrimary);
+                      return (
+                        <div
+                          key={adm.accountId}
+                          className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                            isPrimary
+                              ? 'border-[#BBF7D0] bg-[#F4FBF6]'
+                              : 'border-[#E2E5E9] bg-[#F8F9FA]'
+                          }`}
+                        >
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-semibold text-[#111315]">
+                                {adm.fullName}
+                              </span>
+                              {isPrimary && (
+                                <span className="px-2 py-0.5 text-[10px] font-semibold bg-[#DCFCE7] text-[#166534] rounded-md">
+                                  Primary Sign-In Administrator
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-[#525866]">{adm.title}</div>
+                            <div className="space-y-0.5 text-xs font-mono pt-0.5">
+                              <div className="text-[#111315]">
+                                Username: <strong>{adm.username}</strong>
+                              </div>
+                              <div className="text-[#525866]">
+                                Password:{' '}
+                                {!adm.hasCustomPassword ? (
+                                  <strong className="text-[#111315]">
+                                    {DEFAULT_AO2_PASSWORD}
+                                  </strong>
+                                ) : (
+                                  <span className="italic">Custom password set</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAo2UsernameInput(ao2Account?.username ?? 'ao2.admin');
-                        if (!ao2Account?.hasCustomPassword) {
-                          setAo2PasswordInput(DEFAULT_AO2_PASSWORD);
-                        } else {
-                          setAo2PasswordInput('');
-                        }
-                        setAo2LoginError('');
-                      }}
-                      style={{ color: frontendConfig.accentColor }}
-                      className="px-3 py-1.5 text-xs font-semibold bg-white hover:bg-[#EAEDF1] border border-[#DCE0E6] rounded-lg cursor-pointer shrink-0 self-start sm:self-center"
-                    >
-                      {!ao2Account?.hasCustomPassword ? 'Fill Credentials' : 'Fill Username'}
-                    </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAo2UsernameInput(adm.username);
+                              if (!adm.hasCustomPassword) {
+                                setAo2PasswordInput(DEFAULT_AO2_PASSWORD);
+                              } else {
+                                setAo2PasswordInput('');
+                              }
+                              setAo2LoginError('');
+                            }}
+                            style={{ color: frontendConfig.accentColor }}
+                            className="px-3 py-1.5 text-xs font-semibold bg-white hover:bg-[#EAEDF1] border border-[#DCE0E6] rounded-lg cursor-pointer shrink-0 self-start sm:self-center whitespace-nowrap"
+                          >
+                            {!adm.hasCustomPassword ? 'Fill Credentials' : 'Fill Username'}
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -3360,9 +3843,9 @@ export function PortalWorkspace({
                   <div className="space-y-1">
                     <div className="text-xs text-[#C8E4D6]">
                       <span className="font-semibold text-[#6EE7B7]">
-                        Administrative Officer II (AO-II)
+                        {ao2DisplayName}
                       </span>{' '}
-                      · Full Front-End &amp; Back-End System Authority · Account:{' '}
+                      · {ao2SignedInAccount?.title ?? 'Administrative Officer II (AO-II)'} · Account:{' '}
                       <span className="font-mono font-semibold text-white">
                         @{ao2Session.username}
                       </span>
@@ -3407,9 +3890,15 @@ export function PortalWorkspace({
                   </div>
                 </div>
 
-                {/* AO-II Top KPI Summary Strip (Students, Teachers, Endorsed Documents) */}
+                {/* Interactive AO-II Top KPI Summary Strip */}
                 <div className="grid grid-cols-2 lg:grid-cols-4 border-b border-[#D2E2D9] divide-y sm:divide-y-0 sm:divide-x divide-[#D2E2D9]">
-                  <div className="p-5 space-y-1 bg-gradient-to-br from-white to-[#ECFDF5]">
+                  <button
+                    type="button"
+                    onClick={() => setAo2Tab('records')}
+                    className={`text-left p-5 space-y-1 bg-gradient-to-br from-white to-[#ECFDF5] hover:to-[#DCFCE7] transition-colors cursor-pointer ${
+                      ao2Tab === 'records' ? 'ring-2 ring-inset ring-[#15803D]/35' : ''
+                    }`}
+                  >
                     <div className="text-xs font-semibold text-[#166534]">
                       Number of Students ({backendConfig.activeAcademicYear})
                     </div>
@@ -3419,8 +3908,14 @@ export function PortalWorkspace({
                     <div className="text-[11px] text-[#15803D] font-mono tabular-nums font-medium">
                       {ao2SchoolTotals.totalCapacity} total seats · {ao2SchoolTotals.totalSections} sections
                     </div>
-                  </div>
-                  <div className="p-5 space-y-1 bg-gradient-to-br from-white to-[#EFF6FF]">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAo2Tab('accounts')}
+                    className={`text-left p-5 space-y-1 bg-gradient-to-br from-white to-[#EFF6FF] hover:to-[#DBEAFE] transition-colors cursor-pointer ${
+                      ao2Tab === 'accounts' ? 'ring-2 ring-inset ring-[#1D4ED8]/35' : ''
+                    }`}
+                  >
                     <div className="text-xs font-semibold text-[#1E40AF]">Number of Teachers</div>
                     <div className="font-display text-2xl font-semibold text-[#172554] tabular-nums">
                       {ao2SchoolTotals.totalTeachers}
@@ -3428,8 +3923,14 @@ export function PortalWorkspace({
                     <div className="text-[11px] text-[#1D4ED8] font-mono tabular-nums font-medium">
                       {ao2SchoolTotals.ratio} : 1 pupil-teacher ratio
                     </div>
-                  </div>
-                  <div className="p-5 space-y-1 bg-gradient-to-br from-white to-[#F0FDFA]">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAo2Tab('endorsed')}
+                    className={`text-left p-5 space-y-1 bg-gradient-to-br from-white to-[#F0FDFA] hover:to-[#CCFBF1] transition-colors cursor-pointer ${
+                      ao2Tab === 'endorsed' ? 'ring-2 ring-inset ring-[#0F766E]/35' : ''
+                    }`}
+                  >
                     <div className="text-xs font-semibold text-[#115E59]">Endorsed Documents</div>
                     <div className="font-display text-2xl font-semibold text-[#0F766E] tabular-nums">
                       {ao2EndorsedDocs.length}
@@ -3437,8 +3938,14 @@ export function PortalWorkspace({
                     <div className="text-[11px] text-[#0F766E] font-medium">
                       Endorsed/Principal ready to print
                     </div>
-                  </div>
-                  <div className="p-5 space-y-1 bg-gradient-to-br from-white to-[#FFFBEB]">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAo2Tab('admissions')}
+                    className={`text-left p-5 space-y-1 bg-gradient-to-br from-white to-[#FFFBEB] hover:to-[#FEF3C7] transition-colors cursor-pointer ${
+                      ao2Tab === 'admissions' ? 'ring-2 ring-inset ring-[#B45309]/35' : ''
+                    }`}
+                  >
                     <div className="text-xs font-semibold text-[#92400E]">Parents/Guardian Inquiries</div>
                     <div className="font-display text-2xl font-semibold text-[#B45309] tabular-nums">
                       {admissionsSubmissions.length}
@@ -3446,13 +3953,26 @@ export function PortalWorkspace({
                     <div className="text-[11px] text-[#B45309] font-medium">
                       {backendConfig.admissionsOpen ? 'Inquiry Form Open' : 'Inquiry Form Paused'}
                     </div>
-                  </div>
+                  </button>
                 </div>
 
                 {/* AO-II Navigation Tabs */}
                 <div className="px-6 pt-4 border-b border-[#E2E5E9] bg-white flex flex-wrap gap-2">
                   {[
                     { id: 'dashboard' as Ao2Tab, label: 'AO-II Dashboard' },
+                    {
+                      id: 'records' as Ao2Tab,
+                      label: `Staff & Students (${staffRecords.length + studentRecords.length})`,
+                    },
+                    {
+                      id: 'requisitions' as Ao2Tab,
+                      label: `Material Requisitions (${materialRequisitions.length})`,
+                    },
+                    {
+                      id: 'leave' as Ao2Tab,
+                      label: `Leave Applications (${leaveApplications.length})`,
+                    },
+                    { id: 'posts' as Ao2Tab, label: 'Website Posts' },
                     {
                       id: 'endorsed' as Ao2Tab,
                       label: `Endorsed Docs (${ao2EndorsedDocs.length})`,
@@ -3498,6 +4018,15 @@ export function PortalWorkspace({
                       </button>
                     );
                   })}
+                  <button
+                    type="button"
+                    onClick={() => onOpenInventoryPage('ao2')}
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold border-b-2 border-transparent text-[#0B291E] hover:text-[#15803D] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Package className="w-3.5 h-3.5" />
+                    <span>Inventory ({inventoryItems.length})</span>
+                    <ArrowUpRight className="w-3 h-3" />
+                  </button>
                 </div>
 
                 <div className="p-6 space-y-4">
@@ -3518,6 +4047,81 @@ export function PortalWorkspace({
                       <AlertCircle className="w-4 h-4 shrink-0" />
                       <span>{ao2ErrorMessage}</span>
                     </div>
+                  )}
+
+                  {/* AO-II TAB: STAFF & STUDENTS RECORDS CRUD MANAGER */}
+                  {ao2Tab === 'records' && (
+                    <Ao2StaffStudentsManager
+                      accentColor={frontendConfig.accentColor}
+                      activeAcademicYear={backendConfig.activeAcademicYear}
+                      staffRecords={staffRecords}
+                      studentRecords={studentRecords}
+                      onAddStaff={onAo2AddStaffRecord}
+                      onUpdateStaff={onAo2UpdateStaffRecord}
+                      onDeleteStaff={onAo2DeleteStaffRecord}
+                      onAddStudent={onAo2AddStudentRecord}
+                      onUpdateStudent={onAo2UpdateStudentRecord}
+                      onDeleteStudent={onAo2DeleteStudentRecord}
+                      onReportFeedback={(kind, message) => {
+                        if (kind === 'success') {
+                          setAo2ErrorMessage('');
+                          setAo2SaveMessage(message);
+                        } else {
+                          setAo2SaveMessage('');
+                          setAo2ErrorMessage(message);
+                        }
+                      }}
+                    />
+                  )}
+
+                  {/* AO-II TAB: MATERIAL REQUISITIONS REVIEW */}
+                  {ao2Tab === 'requisitions' && (
+                    <Ao2MaterialRequisitionView
+                      accentColor={frontendConfig.accentColor}
+                      requisitions={materialRequisitions}
+                      onReviewRequisition={onAo2ReviewRequisition}
+                    />
+                  )}
+
+                  {/* AO-II TAB: LEAVE APPLICATIONS (ALL ACCOUNTS APPLY · AO-II EDITS ENTRIES) */}
+                  {ao2Tab === 'leave' && (
+                    <LeaveApplicationWorkspace
+                      mode="ao2"
+                      accentColor={frontendConfig.accentColor}
+                      actorAccountId={
+                        ao2Session.accountId ?? primaryAo2Account?.accountId ?? 'staff-danlog-gabrito'
+                      }
+                      actorRole="AO-II"
+                      actorName={ao2DisplayName}
+                      actorDepartmentOrGrade={
+                        ao2SignedInAccount?.title ?? 'Administrative Officer II (AO-II)'
+                      }
+                      leaveApplications={leaveApplications}
+                      onSubmitLeaveApplication={(payload) =>
+                        onSubmitLeaveApplication('AO-II', payload)
+                      }
+                      onAo2EditLeaveApplication={onAo2EditLeaveApplication}
+                      onAo2EndorseLeaveApplication={onAo2EndorseLeaveApplication}
+                      onAo2DeleteLeaveApplication={onAo2DeleteLeaveApplication}
+                    />
+                  )}
+
+                  {/* AO-II TAB: WEBSITE POSTS & STUDENT ACTIVITIES */}
+                  {ao2Tab === 'posts' && (
+                    <PortalPostPublisher
+                      accentColor={frontendConfig.accentColor}
+                      actorName={ao2DisplayName}
+                      actorRole="AO-II"
+                      actorAccountId={
+                        ao2Session.accountId ?? primaryAo2Account?.accountId ?? 'staff-danlog-gabrito'
+                      }
+                      homePosts={homePosts}
+                      activityPosts={activityPosts}
+                      onCreateHomePost={onCreateHomePost}
+                      onDeleteHomePost={onDeleteHomePost}
+                      onCreateActivityPost={onCreateActivityPost}
+                      onDeleteActivityPost={onDeleteActivityPost}
+                    />
                   )}
 
                   {/* AO-II TAB 0: OVERVIEW DASHBOARD (ENDORSED DOCS, TEACHERS, STUDENTS) */}
@@ -3553,7 +4157,7 @@ export function PortalWorkspace({
                           ) : (
                             <div className="divide-y divide-[#E2E5E9]">
                               {ao2EndorsedDocs.map((doc) => {
-                                const author = TEACHER_PORTAL_PROFILES.find(
+                                const author = mergedTeacherProfiles.find(
                                   (t) => t.id === doc.teacherId
                                 );
                                 return (
@@ -3608,9 +4212,9 @@ export function PortalWorkspace({
                           )}
                         </div>
 
-                        {/* Grade-Level Students & Teachers Breakdown */}
+                        {/* Interactive Grade-Level Students & Teachers Breakdown */}
                         <div className="lg:col-span-6 bg-white rounded-xl border border-[#C7D9EE] overflow-hidden shadow-xs">
-                          <div className="px-5 py-4 bg-gradient-to-r from-[#EFF6FF] to-[#F4F8FD] border-b border-[#D4E2F2] flex items-center justify-between gap-3">
+                          <div className="px-5 py-4 bg-gradient-to-r from-[#EFF6FF] to-[#F4F8FD] border-b border-[#D4E2F2] flex flex-wrap items-center justify-between gap-3">
                             <div>
                               <h4 className="font-display text-lg font-semibold text-[#111315]">
                                 Students &amp; Teachers by Grade Level
@@ -3621,14 +4225,39 @@ export function PortalWorkspace({
                                 {ao2SchoolTotals.totalTeachers} Teachers
                               </p>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => setAo2Tab('backend')}
-                              style={{ color: frontendConfig.accentColor }}
-                              className="text-xs font-semibold hover:underline underline-offset-4 cursor-pointer shrink-0"
-                            >
-                              Manage Capacities
-                            </button>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {(['All', 'Primary (K–3)', 'Intermediate (4–6)'] as const).map(
+                                (divOpt) => {
+                                  const active = ao2DashDivision === divOpt;
+                                  return (
+                                    <button
+                                      key={divOpt}
+                                      type="button"
+                                      onClick={() => setAo2DashDivision(divOpt)}
+                                      className={`px-2.5 py-1 text-[11px] font-semibold rounded-md cursor-pointer whitespace-nowrap shrink-0 ${
+                                        active
+                                          ? 'bg-[#0F3D2E] text-white'
+                                          : 'bg-white text-[#525866] border border-[#DCE0E6] hover:text-[#111315]'
+                                      }`}
+                                    >
+                                      {divOpt === 'All'
+                                        ? 'All'
+                                        : divOpt === 'Primary (K–3)'
+                                        ? 'K–3'
+                                        : '4–6'}
+                                    </button>
+                                  );
+                                }
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setAo2Tab('backend')}
+                                style={{ color: frontendConfig.accentColor }}
+                                className="text-xs font-semibold hover:underline underline-offset-4 cursor-pointer shrink-0 ml-1"
+                              >
+                                Full Controls
+                              </button>
+                            </div>
                           </div>
 
                           <div className="overflow-x-auto">
@@ -3637,29 +4266,66 @@ export function PortalWorkspace({
                                 <tr className="border-b border-[#E2E5E9] bg-[#F8F9FA] text-[11px] font-semibold text-[#525866]">
                                   <th className="py-2.5 px-4">Grade</th>
                                   <th className="py-2.5 px-3 text-right">Students</th>
-                                  <th className="py-2.5 px-3 text-right">Capacity</th>
+                                  <th className="py-2.5 px-3 text-right">Seat Capacity</th>
                                   <th className="py-2.5 px-3 text-right">Teachers</th>
                                   <th className="py-2.5 px-4">Faculty Lead</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-[#E2E5E9]">
-                                {ao2SchoolTotals.activeRows.map((row) => (
-                                  <tr key={row.id} className="hover:bg-[#F8F9FA]">
-                                    <td className="py-2.5 px-4 font-semibold text-[#111315]">
-                                      {row.gradeLabel}
-                                    </td>
-                                    <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#111315]">
-                                      {row.enrolledStudents}
-                                    </td>
-                                    <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#525866]">
-                                      {row.capacity}
-                                    </td>
-                                    <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#111315]">
-                                      {row.teachers}
-                                    </td>
-                                    <td className="py-2.5 px-4 text-[#525866]">{row.facultyLead}</td>
-                                  </tr>
-                                ))}
+                                {ao2SchoolTotals.activeRows
+                                  .filter(
+                                    (row) =>
+                                      ao2DashDivision === 'All' || row.division === ao2DashDivision
+                                  )
+                                  .map((row) => (
+                                    <tr key={row.id} className="hover:bg-[#F8F9FA]">
+                                      <td className="py-2.5 px-4 font-semibold text-[#111315]">
+                                        {row.gradeLabel}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#111315]">
+                                        {row.enrolledStudents}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                                        <div className="inline-flex items-center justify-end gap-1.5">
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              void onUpdateCapacity(
+                                                backendConfig.activeAcademicYear,
+                                                row.id,
+                                                Math.max(row.enrolledStudents, row.capacity - 1)
+                                              )
+                                            }
+                                            aria-label={`Decrease seat capacity for ${row.gradeLabel}`}
+                                            className="w-5 h-5 inline-flex items-center justify-center rounded border border-[#DCE0E6] bg-[#F8F9FA] text-[#525866] hover:bg-white hover:text-[#111315] cursor-pointer"
+                                          >
+                                            <Minus className="w-2.5 h-2.5" />
+                                          </button>
+                                          <span className="font-mono tabular-nums text-[#525866] w-7 text-center">
+                                            {row.capacity}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              void onUpdateCapacity(
+                                                backendConfig.activeAcademicYear,
+                                                row.id,
+                                                row.capacity + 1
+                                              )
+                                            }
+                                            aria-label={`Increase seat capacity for ${row.gradeLabel}`}
+                                            className="w-5 h-5 inline-flex items-center justify-center rounded border border-[#DCE0E6] bg-[#F8F9FA] text-[#525866] hover:bg-white hover:text-[#111315] cursor-pointer"
+                                          >
+                                            <Plus className="w-2.5 h-2.5" />
+                                          </button>
+                                        </div>
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#111315]">
+                                        {row.teachers}
+                                      </td>
+                                      <td className="py-2.5 px-4 text-[#525866]">{row.facultyLead}</td>
+                                    </tr>
+                                  ))}
                               </tbody>
                               <tfoot>
                                 <tr className="border-t border-[#DCE0E6] bg-[#F8F9FA] font-semibold text-[#111315]">
@@ -3680,480 +4346,6 @@ export function PortalWorkspace({
                               </tfoot>
                             </table>
                           </div>
-                        </div>
-                      </div>
-
-                      {/* AO-II School Inventory List */}
-                      <div className="bg-white rounded-xl border border-[#E7DCC4] overflow-hidden shadow-xs">
-                        <div className="px-5 py-4 bg-gradient-to-r from-[#FFFBEB] via-[#FEF9EE] to-[#F7FAF8] border-b border-[#EADFC6] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                          <div className="flex items-start gap-3">
-                            <div
-                              style={{ backgroundColor: `${frontendConfig.accentColor}14` }}
-                              className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-                            >
-                              <Package
-                                className="w-4 h-4"
-                                style={{ color: frontendConfig.accentColor }}
-                              />
-                            </div>
-                            <div>
-                              <h4 className="font-display text-lg font-semibold text-[#111315]">
-                                School Inventory List
-                              </h4>
-                              <p className="text-xs text-[#525866]">
-                                Property, equipment, and classroom supplies tracked by AO-II (Name of
-                                Item, Qty, Status, Date Received, User, and Date Issued).
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={handlePrintInventoryList}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#111315] bg-[#F8F9FA] hover:bg-[#EAEDF1] border border-[#DCE0E6] rounded-lg cursor-pointer"
-                            >
-                              <Printer className="w-3.5 h-3.5" />
-                              <span>Print Inventory</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setShowAddInventoryForm((prev) => !prev)}
-                              style={{ backgroundColor: frontendConfig.accentColor }}
-                              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white rounded-lg cursor-pointer hover:opacity-95"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                              <span>{showAddInventoryForm ? 'Close Form' : 'Add Item'}</span>
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Inventory Summary Metrics */}
-                        <div className="grid grid-cols-2 sm:grid-cols-5 border-b border-[#E2E5E9] bg-[#F8F9FA]/70 divide-y sm:divide-y-0 sm:divide-x divide-[#E2E5E9]">
-                          <div className="px-4 py-3">
-                            <div className="text-[11px] text-[#525866]">Item Entries</div>
-                            <div className="font-mono text-lg font-bold text-[#111315]">
-                              {inventorySummary.totalEntries}
-                            </div>
-                          </div>
-                          <div className="px-4 py-3">
-                            <div className="text-[11px] text-[#525866]">Total Units (Qty)</div>
-                            <div className="font-mono text-lg font-bold text-[#111315]">
-                              {inventorySummary.totalQty}
-                            </div>
-                          </div>
-                          <div className="px-4 py-3">
-                            <div className="text-[11px] text-[#525866]">Available</div>
-                            <div className="font-mono text-lg font-bold text-[#047857]">
-                              {inventorySummary.availableCount}
-                            </div>
-                          </div>
-                          <div className="px-4 py-3">
-                            <div className="text-[11px] text-[#525866]">Issued to Users</div>
-                            <div className="font-mono text-lg font-bold text-[#1D4ED8]">
-                              {inventorySummary.issuedCount}
-                            </div>
-                          </div>
-                          <div className="px-4 py-3">
-                            <div className="text-[11px] text-[#525866]">Low Stock / Repair</div>
-                            <div className="font-mono text-lg font-bold text-[#B45309]">
-                              {inventorySummary.attentionCount}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Add New Inventory Item Form */}
-                        {showAddInventoryForm && (
-                          <form
-                            onSubmit={handleCreateInventoryItem}
-                            className="p-5 bg-[#F8F9FA] border-b border-[#E2E5E9] space-y-4"
-                          >
-                            <div className="text-xs font-semibold text-[#111315]">
-                              Add New Inventory Item
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-                              <div className="lg:col-span-2">
-                                <label
-                                  htmlFor="inv-add-name"
-                                  className="block text-[11px] font-semibold text-[#525866] mb-1"
-                                >
-                                  Name of Item
-                                </label>
-                                <input
-                                  id="inv-add-name"
-                                  type="text"
-                                  required
-                                  value={newInvName}
-                                  onChange={(e) => setNewInvName(e.target.value)}
-                                  placeholder="e.g., Grade 5 Math Manipulative Kit"
-                                  className="w-full px-3 py-2 text-xs bg-white border border-[#DCE0E6] rounded-lg focus:outline-none focus:border-[#111315]"
-                                />
-                              </div>
-
-                              <div>
-                                <label
-                                  htmlFor="inv-add-qty"
-                                  className="block text-[11px] font-semibold text-[#525866] mb-1"
-                                >
-                                  Qty
-                                </label>
-                                <input
-                                  id="inv-add-qty"
-                                  type="number"
-                                  min={0}
-                                  required
-                                  value={newInvQty}
-                                  onChange={(e) => setNewInvQty(e.target.value)}
-                                  className="w-full px-3 py-2 text-xs bg-white border border-[#DCE0E6] rounded-lg font-mono focus:outline-none focus:border-[#111315]"
-                                />
-                              </div>
-
-                              <div>
-                                <label
-                                  htmlFor="inv-add-status"
-                                  className="block text-[11px] font-semibold text-[#525866] mb-1"
-                                >
-                                  Status
-                                </label>
-                                <select
-                                  id="inv-add-status"
-                                  value={newInvStatus}
-                                  onChange={(e) =>
-                                    setNewInvStatus(e.target.value as InventoryStatus)
-                                  }
-                                  className="w-full px-3 py-2 text-xs bg-white border border-[#DCE0E6] rounded-lg focus:outline-none focus:border-[#111315]"
-                                >
-                                  <option value="Available">Available</option>
-                                  <option value="Issued">Issued</option>
-                                  <option value="Low Stock">Low Stock</option>
-                                  <option value="For Repair">For Repair</option>
-                                  <option value="Condemned">Condemned</option>
-                                </select>
-                              </div>
-
-                              <div>
-                                <label
-                                  htmlFor="inv-add-received"
-                                  className="block text-[11px] font-semibold text-[#525866] mb-1"
-                                >
-                                  Date Received
-                                </label>
-                                <input
-                                  id="inv-add-received"
-                                  type="date"
-                                  required
-                                  value={newInvDateReceived}
-                                  onChange={(e) => setNewInvDateReceived(e.target.value)}
-                                  className="w-full px-3 py-2 text-xs bg-white border border-[#DCE0E6] rounded-lg focus:outline-none focus:border-[#111315]"
-                                />
-                              </div>
-
-                              <div>
-                                <label
-                                  htmlFor="inv-add-issued-date"
-                                  className="block text-[11px] font-semibold text-[#525866] mb-1"
-                                >
-                                  Date Issued
-                                </label>
-                                <input
-                                  id="inv-add-issued-date"
-                                  type="date"
-                                  value={newInvDateIssued}
-                                  onChange={(e) => setNewInvDateIssued(e.target.value)}
-                                  className="w-full px-3 py-2 text-xs bg-white border border-[#DCE0E6] rounded-lg focus:outline-none focus:border-[#111315]"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-2 lg:col-span-4">
-                                <label
-                                  htmlFor="inv-add-user"
-                                  className="block text-[11px] font-semibold text-[#525866] mb-1"
-                                >
-                                  User (Issued To / Custodian)
-                                </label>
-                                <input
-                                  id="inv-add-user"
-                                  type="text"
-                                  value={newInvUser}
-                                  onChange={(e) => setNewInvUser(e.target.value)}
-                                  placeholder="e.g., Ms. Mariel Sato · Kindergarten Sampaguita (leave blank for Supply Room)"
-                                  className="w-full px-3 py-2 text-xs bg-white border border-[#DCE0E6] rounded-lg focus:outline-none focus:border-[#111315]"
-                                />
-                              </div>
-
-                              <div className="lg:col-span-2 flex items-end gap-2">
-                                <button
-                                  type="submit"
-                                  disabled={isSavingInventory}
-                                  style={{ backgroundColor: frontendConfig.accentColor }}
-                                  className="px-4 py-2 text-xs font-semibold text-white rounded-lg cursor-pointer hover:opacity-95 disabled:opacity-60"
-                                >
-                                  {isSavingInventory ? 'Saving...' : 'Save Inventory Item'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setShowAddInventoryForm(false)}
-                                  className="px-3 py-2 text-xs font-semibold text-[#525866] hover:text-[#111315] bg-white border border-[#DCE0E6] rounded-lg cursor-pointer"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-                          </form>
-                        )}
-
-                        {/* Search & Status Filter Toolbar */}
-                        <div className="px-5 py-3 border-b border-[#E2E5E9] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="relative flex-1 max-w-sm">
-                            <Search className="w-3.5 h-3.5 text-[#525866] absolute left-3 top-1/2 -translate-y-1/2" />
-                            <input
-                              type="text"
-                              value={inventorySearch}
-                              onChange={(e) => setInventorySearch(e.target.value)}
-                              placeholder="Search item name, user, or date..."
-                              className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#F8F9FA] border border-[#DCE0E6] rounded-lg focus:outline-none focus:border-[#111315]"
-                            />
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            {(
-                              [
-                                'ALL',
-                                'Available',
-                                'Issued',
-                                'Low Stock',
-                                'For Repair',
-                                'Condemned',
-                              ] as const
-                            ).map((statusOption) => {
-                              const active = inventoryStatusFilter === statusOption;
-                              return (
-                                <button
-                                  key={statusOption}
-                                  type="button"
-                                  onClick={() => setInventoryStatusFilter(statusOption)}
-                                  style={
-                                    active
-                                      ? {
-                                          backgroundColor: frontendConfig.accentColor,
-                                          borderColor: frontendConfig.accentColor,
-                                        }
-                                      : undefined
-                                  }
-                                  className={`px-2.5 py-1 text-[11px] font-semibold rounded-md border cursor-pointer transition-colors ${
-                                    active
-                                      ? 'text-white'
-                                      : 'bg-white text-[#525866] border-[#DCE0E6] hover:text-[#111315]'
-                                  }`}
-                                >
-                                  {statusOption === 'ALL' ? 'All Statuses' : statusOption}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        {/* Inventory Table */}
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left border-collapse text-xs">
-                            <thead>
-                              <tr className="border-b border-[#E2E5E9] bg-[#F8F9FA] text-[11px] font-semibold text-[#525866]">
-                                <th className="py-2.5 px-4">Name of Item</th>
-                                <th className="py-2.5 px-3 text-right">Qty</th>
-                                <th className="py-2.5 px-3">Status</th>
-                                <th className="py-2.5 px-3">Date Received</th>
-                                <th className="py-2.5 px-3">User</th>
-                                <th className="py-2.5 px-3">Date Issued</th>
-                                <th className="py-2.5 px-4 text-right">Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-[#E2E5E9]">
-                              {filteredInventoryItems.length === 0 ? (
-                                <tr>
-                                  <td
-                                    colSpan={7}
-                                    className="py-8 px-4 text-center text-xs text-[#525866]"
-                                  >
-                                    No inventory items match the current search or status filter.
-                                  </td>
-                                </tr>
-                              ) : (
-                                filteredInventoryItems.map((item) => {
-                                  const isEditing = editingInventoryId === item.id;
-                                  const statusBadgeClass =
-                                    item.status === 'Available'
-                                      ? 'bg-[#D1FAE5] text-[#065F46]'
-                                      : item.status === 'Issued'
-                                      ? 'bg-[#DBEAFE] text-[#1E40AF]'
-                                      : item.status === 'Low Stock'
-                                      ? 'bg-[#FEF3C7] text-[#92400E]'
-                                      : item.status === 'For Repair'
-                                      ? 'bg-[#FFEDD5] text-[#9A3412]'
-                                      : 'bg-[#FEE2E2] text-[#991B1B]';
-
-                                  if (isEditing) {
-                                    return (
-                                      <tr key={item.id} className="bg-[#F8F9FA]">
-                                        <td className="py-2.5 px-4">
-                                          <input
-                                            type="text"
-                                            value={editInvDraft.itemName}
-                                            onChange={(e) =>
-                                              setEditInvDraft((prev) => ({
-                                                ...prev,
-                                                itemName: e.target.value,
-                                              }))
-                                            }
-                                            className="w-full min-w-[180px] px-2 py-1 text-xs bg-white border border-[#DCE0E6] rounded"
-                                          />
-                                        </td>
-                                        <td className="py-2.5 px-3 text-right">
-                                          <input
-                                            type="number"
-                                            min={0}
-                                            value={editInvDraft.quantity}
-                                            onChange={(e) =>
-                                              setEditInvDraft((prev) => ({
-                                                ...prev,
-                                                quantity: Number(e.target.value),
-                                              }))
-                                            }
-                                            className="w-16 px-2 py-1 text-xs text-right font-mono bg-white border border-[#DCE0E6] rounded"
-                                          />
-                                        </td>
-                                        <td className="py-2.5 px-3">
-                                          <select
-                                            value={editInvDraft.status}
-                                            onChange={(e) =>
-                                              setEditInvDraft((prev) => ({
-                                                ...prev,
-                                                status: e.target.value as InventoryStatus,
-                                              }))
-                                            }
-                                            className="px-2 py-1 text-xs bg-white border border-[#DCE0E6] rounded"
-                                          >
-                                            <option value="Available">Available</option>
-                                            <option value="Issued">Issued</option>
-                                            <option value="Low Stock">Low Stock</option>
-                                            <option value="For Repair">For Repair</option>
-                                            <option value="Condemned">Condemned</option>
-                                          </select>
-                                        </td>
-                                        <td className="py-2.5 px-3">
-                                          <input
-                                            type="date"
-                                            value={editInvDraft.dateReceived}
-                                            onChange={(e) =>
-                                              setEditInvDraft((prev) => ({
-                                                ...prev,
-                                                dateReceived: e.target.value,
-                                              }))
-                                            }
-                                            className="px-2 py-1 text-xs bg-white border border-[#DCE0E6] rounded"
-                                          />
-                                        </td>
-                                        <td className="py-2.5 px-3">
-                                          <input
-                                            type="text"
-                                            value={editInvDraft.issuedToUser}
-                                            onChange={(e) =>
-                                              setEditInvDraft((prev) => ({
-                                                ...prev,
-                                                issuedToUser: e.target.value,
-                                              }))
-                                            }
-                                            className="w-full min-w-[160px] px-2 py-1 text-xs bg-white border border-[#DCE0E6] rounded"
-                                          />
-                                        </td>
-                                        <td className="py-2.5 px-3">
-                                          <input
-                                            type="date"
-                                            value={editInvDraft.dateIssued}
-                                            onChange={(e) =>
-                                              setEditInvDraft((prev) => ({
-                                                ...prev,
-                                                dateIssued: e.target.value,
-                                              }))
-                                            }
-                                            className="px-2 py-1 text-xs bg-white border border-[#DCE0E6] rounded"
-                                          />
-                                        </td>
-                                        <td className="py-2.5 px-4 text-right whitespace-nowrap">
-                                          <div className="inline-flex items-center gap-1.5">
-                                            <button
-                                              type="button"
-                                              disabled={isSavingInventory}
-                                              onClick={() => handleSaveEditInventory(item.id)}
-                                              style={{ backgroundColor: frontendConfig.accentColor }}
-                                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white rounded cursor-pointer"
-                                            >
-                                              <Check className="w-3 h-3" />
-                                              <span>Save</span>
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => setEditingInventoryId(null)}
-                                              className="px-2 py-1 text-[11px] font-semibold text-[#525866] hover:text-[#111315] bg-white border border-[#DCE0E6] rounded cursor-pointer"
-                                            >
-                                              Cancel
-                                            </button>
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    );
-                                  }
-
-                                  return (
-                                    <tr key={item.id} className="hover:bg-[#F8F9FA]">
-                                      <td className="py-2.5 px-4 font-semibold text-[#111315]">
-                                        {item.itemName}
-                                      </td>
-                                      <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-[#111315]">
-                                        {item.quantity}
-                                      </td>
-                                      <td className="py-2.5 px-3">
-                                        <span
-                                          className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded ${statusBadgeClass}`}
-                                        >
-                                          {item.status}
-                                        </span>
-                                      </td>
-                                      <td className="py-2.5 px-3 font-mono tabular-nums text-[#525866]">
-                                        {item.dateReceived}
-                                      </td>
-                                      <td className="py-2.5 px-3 text-[#111315]">
-                                        {item.issuedToUser}
-                                      </td>
-                                      <td className="py-2.5 px-3 font-mono tabular-nums text-[#525866]">
-                                        {item.dateIssued}
-                                      </td>
-                                      <td className="py-2.5 px-4 text-right whitespace-nowrap">
-                                        <div className="inline-flex items-center gap-1.5">
-                                          <button
-                                            type="button"
-                                            onClick={() => handleStartEditInventory(item)}
-                                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-[#111315] bg-[#F8F9FA] hover:bg-[#EAEDF1] border border-[#DCE0E6] rounded cursor-pointer"
-                                            title="Edit item"
-                                          >
-                                            <Pencil className="w-3 h-3" />
-                                            <span>Edit</span>
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => handleDeleteInventory(item.id)}
-                                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-[#B91C1C] bg-[#FEF2F2] hover:bg-[#FEE2E2] border border-[#FECACA] rounded cursor-pointer"
-                                            title="Delete item"
-                                          >
-                                            <Trash2 className="w-3 h-3" />
-                                          </button>
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  );
-                                })
-                              )}
-                            </tbody>
-                          </table>
                         </div>
                       </div>
                     </div>
@@ -4597,7 +4789,7 @@ export function PortalWorkspace({
                             className="px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA] text-[#111315]"
                           >
                             <option value="ALL">All Teachers ({ao2EndorsedDocs.length})</option>
-                            {TEACHER_PORTAL_PROFILES.map((t) => (
+                            {mergedTeacherProfiles.map((t) => (
                               <option key={t.id} value={t.id}>
                                 {t.name}
                               </option>
@@ -4623,8 +4815,8 @@ export function PortalWorkspace({
                             No endorsed documents match your current filter.
                           </p>
                           <p className="text-xs text-[#525866]">
-                            Once Dr. Elena Vance approves a teacher submission in the Principal&apos;s
-                            Office portal, it will appear here automatically as{' '}
+                            Once {principalDisplayName} approves a teacher submission in the
+                            Principal&apos;s Office portal, it will appear here automatically as{' '}
                             <strong>Endorsed/Principal</strong>.
                           </p>
                         </div>
@@ -4632,7 +4824,7 @@ export function PortalWorkspace({
                         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                           <div className="lg:col-span-5 bg-white rounded-xl border border-[#E2E5E9] divide-y divide-[#E2E5E9]">
                             {ao2FilteredEndorsedDocs.map((doc) => {
-                              const teacher = TEACHER_PORTAL_PROFILES.find(
+                              const teacher = mergedTeacherProfiles.find(
                                 (t) => t.id === doc.teacherId
                               );
                               const isSelected = inspectedAo2Doc?.id === doc.id;
@@ -4677,7 +4869,7 @@ export function PortalWorkspace({
                           {inspectedAo2Doc && (
                             <div className="lg:col-span-7 bg-white rounded-xl border border-[#E2E5E9] p-6 space-y-5">
                               {(() => {
-                                const author = TEACHER_PORTAL_PROFILES.find(
+                                const author = mergedTeacherProfiles.find(
                                   (t) => t.id === inspectedAo2Doc.teacherId
                                 );
                                 const fileExt = inspectedAo2Doc.fileName
@@ -4714,12 +4906,12 @@ export function PortalWorkspace({
                                         <p className="text-xs text-[#525866]">
                                           Author:{' '}
                                           <span className="font-semibold text-[#111315]">
-                                            {author?.name}
+                                            {author?.name ?? 'Faculty Member'}
                                           </span>{' '}
                                           · Certified by{' '}
                                           <span className="font-semibold text-[#111315]">
                                             {inspectedAo2Doc.endorsedBy ??
-                                              'Dr. Elena Vance (School Principal)'}
+                                              `${principalDisplayName} (${principalRoleTitle})`}
                                           </span>
                                         </p>
                                       </div>
@@ -4989,108 +5181,796 @@ export function PortalWorkspace({
                     </div>
                   )}
 
-                  {/* AO-II TAB 4: STAFF & PORTAL ACCOUNTS (TEACHERS, PRINCIPAL, AO-II) */}
+                  {/* AO-II TAB 4: STAFF & PORTAL ACCOUNTS (ADD, UPDATE, DELETE) */}
                   {ao2Tab === 'accounts' && (
                     <div className="space-y-6">
+                      {/* Teacher & Faculty Portal Accounts (Add, Edit Profile & Credentials, Delete) */}
                       <div className="bg-white rounded-xl border border-[#E2E5E9] p-6 space-y-5">
-                        <div>
-                          <h4 className="font-display text-lg font-semibold text-[#111315]">
-                            Teacher Portal Usernames &amp; Password Administration
-                          </h4>
-                          <p className="text-xs text-[#525866]">
-                            Assign unique usernames and reset passwords for each teacher account.
-                          </p>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div>
+                            <h4 className="font-display text-lg font-semibold text-[#111315]">
+                              Teacher &amp; Staff Portal Accounts ({mergedTeacherProfiles.length})
+                            </h4>
+                            <p className="text-xs text-[#525866]">
+                              Add new faculty portal logins, edit profile details &amp; credentials,
+                              or delete accounts. All changes persist to the database and sync
+                              across all pages immediately.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAo2SaveMessage('');
+                              setAo2ErrorMessage('');
+                              setAddAccountMode('portal');
+                              setShowAddAccountModal(true);
+                            }}
+                            style={{ backgroundColor: frontendConfig.accentColor }}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white rounded-lg cursor-pointer hover:opacity-95 whitespace-nowrap shrink-0 self-start sm:self-auto"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Add Staff &amp; Portal Account</span>
+                          </button>
+                        </div>
+
+                        {mergedTeacherProfiles.length === 0 ? (
+                          <div className="rounded-xl border border-dashed border-[#DCE0E6] p-8 text-center text-xs text-[#525866]">
+                            No teacher portal accounts found. Click{' '}
+                            <strong>Add Staff &amp; Portal Account</strong> above to create one.
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-[#E2E5E9]">
+                            {mergedTeacherProfiles.map((t) => {
+                              const acc = teacherAccounts.find((a) => a.teacherId === t.id);
+                              const draft = accountDrafts[t.id] ?? {
+                                username: acc?.username ?? '',
+                                newPassword: '',
+                                fullName: t.name,
+                                title: t.title,
+                                department: t.department,
+                                assignedGradeId: t.assignedGradeId,
+                                assignedGradeLabel: t.assignedGradeLabel,
+                                room: t.room,
+                                email: t.email,
+                                employmentStatus: 'Regular / Permanent' as const,
+                              };
+                              const isEditingProfile = editingAccountProfileId === t.id;
+                              const isConfirmingDelete = confirmDeleteAccountId === t.id;
+                              const isBusy = accountBusyId === t.id;
+
+                              return (
+                                <div key={t.id} className="py-5 space-y-4">
+                                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-end">
+                                    <div className="lg:col-span-4 space-y-1">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-sm font-semibold text-[#111315]">
+                                          {t.name}
+                                        </span>
+                                        <span className="text-[11px] font-medium text-[#15803D]">
+                                          {t.title}
+                                        </span>
+                                      </div>
+                                      <div className="text-xs text-[#525866]">
+                                        {t.assignedGradeLabel} · {t.room}
+                                      </div>
+                                      <div className="text-[11px] font-mono text-[#525866]">
+                                        ID: {t.id} · Updated: {acc?.updatedAt ?? 'Default'}
+                                      </div>
+                                    </div>
+
+                                    <div className="lg:col-span-2">
+                                      <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                        Username
+                                      </label>
+                                      <input
+                                        type="text"
+                                        value={draft.username}
+                                        onChange={(e) =>
+                                          setAccountDrafts((prev) => ({
+                                            ...prev,
+                                            [t.id]: { ...draft, username: e.target.value },
+                                          }))
+                                        }
+                                        className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                      />
+                                    </div>
+
+                                    <div className="lg:col-span-3">
+                                      <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                        Set / Reset Password
+                                      </label>
+                                      <input
+                                        type="password"
+                                        value={draft.newPassword}
+                                        placeholder="Leave blank to keep current"
+                                        onChange={(e) =>
+                                          setAccountDrafts((prev) => ({
+                                            ...prev,
+                                            [t.id]: { ...draft, newPassword: e.target.value },
+                                          }))
+                                        }
+                                        className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                      />
+                                    </div>
+
+                                    <div className="lg:col-span-3 flex flex-wrap items-center justify-end gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setEditingAccountProfileId((prev) =>
+                                            prev === t.id ? null : t.id
+                                          )
+                                        }
+                                        className={`inline-flex items-center gap-1 px-2.5 py-2 text-xs font-semibold rounded-lg border cursor-pointer whitespace-nowrap shrink-0 ${
+                                          isEditingProfile
+                                            ? 'border-[#0B291E] bg-[#ECFDF5] text-[#0B291E]'
+                                            : 'border-[#DCE0E6] bg-white text-[#111315] hover:bg-[#F8F9FA]'
+                                        }`}
+                                      >
+                                        <Pencil className="w-3 h-3" />
+                                        <span>{isEditingProfile ? 'Hide Profile' : 'Edit Profile'}</span>
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        disabled={isBusy}
+                                        onClick={async () => {
+                                          setAo2SaveMessage('');
+                                          setAo2ErrorMessage('');
+                                          setAccountBusyId(t.id);
+                                          const res = await onAo2UpdateTeacherAccount(
+                                            t.id,
+                                            draft.username,
+                                            draft.newPassword || undefined,
+                                            {
+                                              fullName: draft.fullName,
+                                              title: draft.title,
+                                              department: draft.department,
+                                              assignedGradeId: draft.assignedGradeId,
+                                              assignedGradeLabel: draft.assignedGradeLabel,
+                                              room: draft.room,
+                                              email: draft.email,
+                                              employmentStatus: draft.employmentStatus,
+                                            }
+                                          );
+                                          setAccountBusyId(null);
+                                          if (!res.ok) {
+                                            setAo2ErrorMessage(
+                                              res.error || 'Failed to update teacher account.'
+                                            );
+                                            return;
+                                          }
+                                          setAccountDrafts((prev) => ({
+                                            ...prev,
+                                            [t.id]: { ...draft, newPassword: '' },
+                                          }));
+                                          setEditingAccountProfileId(null);
+                                          setAo2SaveMessage(
+                                            `Saved database updates for ${draft.fullName} (@${draft.username}).`
+                                          );
+                                        }}
+                                        style={{ backgroundColor: frontendConfig.accentColor }}
+                                        className="px-3.5 py-2 text-xs font-semibold text-white rounded-lg cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
+                                      >
+                                        Save
+                                      </button>
+
+                                      {isConfirmingDelete ? (
+                                        <div className="inline-flex items-center gap-1">
+                                          <button
+                                            type="button"
+                                            disabled={isBusy}
+                                            onClick={async () => {
+                                              setAo2SaveMessage('');
+                                              setAo2ErrorMessage('');
+                                              setAccountBusyId(t.id);
+                                              const res = await onAo2DeleteTeacherAccount(t.id);
+                                              setAccountBusyId(null);
+                                              setConfirmDeleteAccountId(null);
+                                              if (!res.ok) {
+                                                setAo2ErrorMessage(
+                                                  res.error || 'Could not delete teacher account.'
+                                                );
+                                                return;
+                                              }
+                                              setAo2SaveMessage(
+                                                `Deleted portal account and staff record for ${t.name}.`
+                                              );
+                                            }}
+                                            className="px-2.5 py-2 text-xs font-semibold bg-[#B91C1C] text-white rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                                          >
+                                            Confirm
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setConfirmDeleteAccountId(null)}
+                                            className="px-2 py-2 text-xs font-semibold border border-[#DCE0E6] text-[#525866] rounded-lg cursor-pointer"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => setConfirmDeleteAccountId(t.id)}
+                                          aria-label={`Delete ${t.name} account`}
+                                          className="inline-flex items-center gap-1 px-2.5 py-2 text-xs font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                          <span>Delete</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {isEditingProfile && (
+                                    <div className="p-4 rounded-xl border border-[#CBDAD0] bg-[#F8FBF9] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                                      <div>
+                                        <label className="block text-[11px] font-semibold text-[#525866] mb-1">
+                                          Full Name
+                                        </label>
+                                        <input
+                                          type="text"
+                                          value={draft.fullName}
+                                          onChange={(e) =>
+                                            setAccountDrafts((prev) => ({
+                                              ...prev,
+                                              [t.id]: { ...draft, fullName: e.target.value },
+                                            }))
+                                          }
+                                          className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#DCE0E6] bg-white"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[11px] font-semibold text-[#525866] mb-1">
+                                          Position / Title
+                                        </label>
+                                        <input
+                                          type="text"
+                                          value={draft.title}
+                                          onChange={(e) =>
+                                            setAccountDrafts((prev) => ({
+                                              ...prev,
+                                              [t.id]: { ...draft, title: e.target.value },
+                                            }))
+                                          }
+                                          className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#DCE0E6] bg-white"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[11px] font-semibold text-[#525866] mb-1">
+                                          Department
+                                        </label>
+                                        <input
+                                          type="text"
+                                          value={draft.department}
+                                          onChange={(e) =>
+                                            setAccountDrafts((prev) => ({
+                                              ...prev,
+                                              [t.id]: { ...draft, department: e.target.value },
+                                            }))
+                                          }
+                                          className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#DCE0E6] bg-white"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[11px] font-semibold text-[#525866] mb-1">
+                                          Assigned Grade
+                                        </label>
+                                        <select
+                                          value={draft.assignedGradeId}
+                                          onChange={(e) => {
+                                            const gradeId = e.target.value;
+                                            const gradeLabels: Record<string, string> = {
+                                              k: 'Kindergarten · Primary Division',
+                                              g1: 'Grade 1 · Primary Division',
+                                              g2: 'Grade 2 · Primary Division',
+                                              g3: 'Grade 3 · Primary Division',
+                                              g4: 'Grade 4 · Intermediate Division',
+                                              g5: 'Grade 5 · Intermediate Division',
+                                              g6: 'Grade 6 · Intermediate Division',
+                                              all: 'School-Wide Faculty (K–6)',
+                                            };
+                                            setAccountDrafts((prev) => ({
+                                              ...prev,
+                                              [t.id]: {
+                                                ...draft,
+                                                assignedGradeId: gradeId,
+                                                assignedGradeLabel:
+                                                  gradeLabels[gradeId] ?? draft.assignedGradeLabel,
+                                              },
+                                            }));
+                                          }}
+                                          className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#DCE0E6] bg-white"
+                                        >
+                                          <option value="k">Kindergarten</option>
+                                          <option value="g1">Grade 1</option>
+                                          <option value="g2">Grade 2</option>
+                                          <option value="g3">Grade 3</option>
+                                          <option value="g4">Grade 4</option>
+                                          <option value="g5">Grade 5</option>
+                                          <option value="g6">Grade 6</option>
+                                          <option value="all">All Grades (K–6)</option>
+                                        </select>
+                                      </div>
+                                      <div>
+                                        <label className="block text-[11px] font-semibold text-[#525866] mb-1">
+                                          Grade / Section Label
+                                        </label>
+                                        <input
+                                          type="text"
+                                          value={draft.assignedGradeLabel}
+                                          onChange={(e) =>
+                                            setAccountDrafts((prev) => ({
+                                              ...prev,
+                                              [t.id]: {
+                                                ...draft,
+                                                assignedGradeLabel: e.target.value,
+                                              },
+                                            }))
+                                          }
+                                          className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#DCE0E6] bg-white"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[11px] font-semibold text-[#525866] mb-1">
+                                          Room / Station
+                                        </label>
+                                        <input
+                                          type="text"
+                                          value={draft.room}
+                                          onChange={(e) =>
+                                            setAccountDrafts((prev) => ({
+                                              ...prev,
+                                              [t.id]: { ...draft, room: e.target.value },
+                                            }))
+                                          }
+                                          className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#DCE0E6] bg-white"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[11px] font-semibold text-[#525866] mb-1">
+                                          Email
+                                        </label>
+                                        <input
+                                          type="email"
+                                          value={draft.email}
+                                          onChange={(e) =>
+                                            setAccountDrafts((prev) => ({
+                                              ...prev,
+                                              [t.id]: { ...draft, email: e.target.value },
+                                            }))
+                                          }
+                                          className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#DCE0E6] bg-white"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[11px] font-semibold text-[#525866] mb-1">
+                                          Employment Status
+                                        </label>
+                                        <select
+                                          value={draft.employmentStatus}
+                                          onChange={(e) =>
+                                            setAccountDrafts((prev) => ({
+                                              ...prev,
+                                              [t.id]: {
+                                                ...draft,
+                                                employmentStatus: e.target
+                                                  .value as StaffMemberRecord['employmentStatus'],
+                                              },
+                                            }))
+                                          }
+                                          className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#DCE0E6] bg-white"
+                                        >
+                                          <option value="Regular / Permanent">
+                                            Regular / Permanent
+                                          </option>
+                                          <option value="Contractual">Contractual</option>
+                                          <option value="Volunteer">Volunteer</option>
+                                          <option value="On Leave">On Leave</option>
+                                        </select>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Principal & AO-II Administrator Accounts */}
+                      <div className="bg-white rounded-xl border border-[#E2E5E9] p-6 space-y-5">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div>
+                            <h4 className="font-display text-lg font-semibold text-[#111315]">
+                              Principal &amp; AO-II Administrator Accounts (
+                              {(principalAccount ? 1 : 0) + ao2AdminAccountsList.length})
+                            </h4>
+                            <p className="text-xs text-[#525866]">
+                              Update display name, title, login username, and password, or set which
+                              Administrator account appears in AO-II Admin Console Sign In.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                            {!principalAccount && onAo2CreatePrincipalAccount && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAo2SaveMessage('');
+                                  setAo2ErrorMessage('');
+                                  setAddAccountMode('principal');
+                                  setNewAccRole('Principal');
+                                  setNewAccTitle('School Principal');
+                                  setNewAccDepartment('Office of the School Principal');
+                                  setNewAccGradeId('all');
+                                  setNewAccGradeLabel('School-Wide Oversight (K–6)');
+                                  setNewAccRoom('Administration Wing · Office 101');
+                                  setShowAddAccountModal(true);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold border border-[#CBD5E1] bg-white text-[#111315] hover:bg-[#F8FAFC] rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>Add Principal Account</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAo2SaveMessage('');
+                                setAo2ErrorMessage('');
+                                setAddAccountMode('admin');
+                                setNewAccRole('Administrative Officer');
+                                setNewAccTitle('Administrative Officer II (AO-II)');
+                                setNewAccDepartment('Records, Enrollment & Property Supply');
+                                setNewAccGradeId('all');
+                                setNewAccGradeLabel('School-Wide Administration');
+                                setNewAccRoom('Administration Wing · Registrar Desk');
+                                setNewAccSetPrimaryAdmin(true);
+                                setShowAddAccountModal(true);
+                              }}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-[#0B291E] text-white hover:bg-[#134231] rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>Add AO-II Administrator</span>
+                            </button>
+                          </div>
                         </div>
 
                         <div className="divide-y divide-[#E2E5E9]">
-                          {TEACHER_PORTAL_PROFILES.map((t) => {
-                            const acc = teacherAccounts.find((a) => a.teacherId === t.id);
-                            const draft = accountDrafts[t.id] ?? {
-                              username: acc?.username ?? '',
-                              newPassword: '',
-                            };
-                            return (
-                              <div
-                                key={t.id}
-                                className="py-5 grid grid-cols-1 lg:grid-cols-12 gap-4 items-end"
-                              >
-                                <div className="lg:col-span-4 space-y-1">
+                          {/* Principal Credential Row (when configured) */}
+                          {principalAccount && (
+                            <div className="py-5 space-y-3">
+                              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-end">
+                                <div className="lg:col-span-3 space-y-1">
                                   <div className="text-sm font-semibold text-[#111315]">
-                                    {t.name}
+                                    {principalDisplayName}
                                   </div>
-                                  <div className="text-xs text-[#525866]">
-                                    {t.assignedGradeLabel}
-                                  </div>
+                                  <div className="text-xs text-[#525866]">{principalRoleTitle}</div>
                                   <div className="text-[11px] font-mono text-[#525866]">
-                                    Updated: {acc?.updatedAt ?? 'Default'}
+                                    Updated: {principalAccount.updatedAt}
                                   </div>
                                 </div>
 
                                 <div className="lg:col-span-3">
                                   <label className="block text-xs font-semibold text-[#111315] mb-1">
-                                    Username
+                                    Principal Full Name
                                   </label>
                                   <input
                                     type="text"
-                                    value={draft.username}
+                                    value={principalDraft.fullName}
                                     onChange={(e) =>
-                                      setAccountDrafts((prev) => ({
-                                        ...prev,
-                                        [t.id]: { ...draft, username: e.target.value },
-                                      }))
+                                      setPrincipalDraft((p) => ({ ...p, fullName: e.target.value }))
+                                    }
+                                    className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                  />
+                                </div>
+
+                                <div className="lg:col-span-2">
+                                  <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                    Principal Username
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={principalDraft.username}
+                                    onChange={(e) =>
+                                      setPrincipalDraft((p) => ({ ...p, username: e.target.value }))
                                     }
                                     className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
                                   />
                                 </div>
 
-                                <div className="lg:col-span-3">
+                                <div className="lg:col-span-2">
                                   <label className="block text-xs font-semibold text-[#111315] mb-1">
-                                    Set / Reset Password
+                                    Reset Password
                                   </label>
                                   <input
                                     type="password"
-                                    value={draft.newPassword}
-                                    placeholder="Leave blank to keep current"
+                                    value={principalDraft.newPassword}
+                                    placeholder="Keep current"
                                     onChange={(e) =>
-                                      setAccountDrafts((prev) => ({
-                                        ...prev,
-                                        [t.id]: { ...draft, newPassword: e.target.value },
+                                      setPrincipalDraft((p) => ({
+                                        ...p,
+                                        newPassword: e.target.value,
                                       }))
                                     }
                                     className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
                                   />
                                 </div>
 
-                                <div className="lg:col-span-2 flex justify-end">
+                                <div className="lg:col-span-2 flex flex-wrap items-center justify-end gap-1.5">
                                   <button
                                     type="button"
                                     onClick={async () => {
                                       setAo2SaveMessage('');
                                       setAo2ErrorMessage('');
-                                      const res = await onAo2UpdateTeacherAccount(
-                                        t.id,
-                                        draft.username,
-                                        draft.newPassword || undefined
+                                      const res = await onAo2UpdatePrincipalAccount(
+                                        principalDraft.username,
+                                        principalDraft.newPassword || undefined,
+                                        {
+                                          fullName: principalDraft.fullName,
+                                          title: principalDraft.title,
+                                        }
                                       );
                                       if (!res.ok) {
                                         setAo2ErrorMessage(
-                                          res.error || 'Failed to update teacher credentials.'
+                                          res.error || 'Failed to update Principal credentials.'
                                         );
                                         return;
                                       }
-                                      setAccountDrafts((prev) => ({
-                                        ...prev,
-                                        [t.id]: { ...draft, newPassword: '' },
-                                      }));
+                                      setPrincipalDraft((p) => ({ ...p, newPassword: '' }));
                                       setAo2SaveMessage(
-                                        `Updated login credentials for ${t.name} (@${draft.username}).`
+                                        `Updated Principal account (${principalDraft.fullName} · @${principalDraft.username}).`
                                       );
                                     }}
                                     style={{ backgroundColor: frontendConfig.accentColor }}
-                                    className="w-full lg:w-auto px-4 py-2 text-xs font-semibold text-white rounded-lg cursor-pointer whitespace-nowrap"
+                                    className="px-3 py-2 text-xs font-semibold text-white rounded-lg cursor-pointer whitespace-nowrap shrink-0"
                                   >
-                                    Save Account
+                                    Save
                                   </button>
+
+                                  {onAo2DeletePrincipalAccount &&
+                                    (confirmDeletePrincipal ? (
+                                      <div className="inline-flex items-center gap-1">
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            setAo2SaveMessage('');
+                                            setAo2ErrorMessage('');
+                                            const res = await onAo2DeletePrincipalAccount();
+                                            setConfirmDeletePrincipal(false);
+                                            if (!res.ok) {
+                                              setAo2ErrorMessage(
+                                                res.error || 'Could not delete Principal account.'
+                                              );
+                                              return;
+                                            }
+                                            setAo2SaveMessage(
+                                              `Removed School Principal account (${principalDisplayName}).`
+                                            );
+                                          }}
+                                          className="px-2 py-2 text-[11px] font-semibold bg-[#B91C1C] text-white rounded-lg cursor-pointer"
+                                        >
+                                          Confirm
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setConfirmDeletePrincipal(false)}
+                                          className="px-2 py-2 text-[11px] border border-[#DCE0E6] text-[#525866] rounded-lg cursor-pointer"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmDeletePrincipal(true)}
+                                        aria-label={`Delete ${principalDisplayName}`}
+                                        className="p-2 text-xs font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] rounded-lg cursor-pointer"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    ))}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* All AO-II Administrator Accounts */}
+                          {ao2AdminAccountsList.map((adm) => {
+                            const draft = ao2AdminDrafts[adm.accountId] ?? {
+                              username: adm.username,
+                              newPassword: '',
+                              fullName: adm.fullName,
+                              title: adm.title,
+                            };
+                            const isPrimary =
+                              adm.accountId === primaryAo2Account?.accountId ||
+                              Boolean(adm.isPrimary);
+                            const isConfirmingDel = confirmDeleteAdminId === adm.accountId;
+
+                            return (
+                              <div key={adm.accountId} className="py-5 space-y-3">
+                                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-end">
+                                  <div className="lg:col-span-3 space-y-1">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <span className="text-sm font-semibold text-[#111315]">
+                                        {adm.fullName}
+                                      </span>
+                                      {isPrimary && (
+                                        <span className="px-2 py-0.5 text-[10px] font-semibold bg-[#DCFCE7] text-[#166534] rounded-md">
+                                          Sign-In Primary
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-xs text-[#525866]">{adm.title}</div>
+                                    <div className="text-[11px] font-mono text-[#525866]">
+                                      ID: {adm.accountId} · Updated: {adm.updatedAt}
+                                    </div>
+                                  </div>
+
+                                  <div className="lg:col-span-3">
+                                    <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                      Administrator Full Name
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={draft.fullName}
+                                      onChange={(e) =>
+                                        setAo2AdminDrafts((p) => ({
+                                          ...p,
+                                          [adm.accountId]: { ...draft, fullName: e.target.value },
+                                        }))
+                                      }
+                                      className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                    />
+                                  </div>
+
+                                  <div className="lg:col-span-2">
+                                    <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                      AO-II Username
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={draft.username}
+                                      onChange={(e) =>
+                                        setAo2AdminDrafts((p) => ({
+                                          ...p,
+                                          [adm.accountId]: { ...draft, username: e.target.value },
+                                        }))
+                                      }
+                                      className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                    />
+                                  </div>
+
+                                  <div className="lg:col-span-2">
+                                    <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                      Update Password
+                                    </label>
+                                    <input
+                                      type="password"
+                                      value={draft.newPassword}
+                                      placeholder="Keep current"
+                                      onChange={(e) =>
+                                        setAo2AdminDrafts((p) => ({
+                                          ...p,
+                                          [adm.accountId]: {
+                                            ...draft,
+                                            newPassword: e.target.value,
+                                          },
+                                        }))
+                                      }
+                                      className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                    />
+                                  </div>
+
+                                  <div className="lg:col-span-2 flex flex-wrap items-center justify-end gap-1.5">
+                                    {!isPrimary && onAo2SetPrimaryAdminAccount && (
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          setAo2SaveMessage('');
+                                          setAo2ErrorMessage('');
+                                          const res = await onAo2SetPrimaryAdminAccount(
+                                            adm.accountId
+                                          );
+                                          if (!res.ok) {
+                                            setAo2ErrorMessage(
+                                              res.error || 'Could not set primary administrator.'
+                                            );
+                                            return;
+                                          }
+                                          setAo2SaveMessage(
+                                            `Set ${adm.fullName} (@${adm.username}) as Primary AO-II Console Sign-In Administrator.`
+                                          );
+                                        }}
+                                        className="px-2.5 py-2 text-[11px] font-semibold border border-[#BBF7D0] bg-[#ECFDF5] text-[#0B291E] hover:bg-[#DCFCE7] rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                                      >
+                                        Use in Sign In
+                                      </button>
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        setAo2SaveMessage('');
+                                        setAo2ErrorMessage('');
+                                        const res = await onAo2UpdateOwnAccount(
+                                          draft.username,
+                                          draft.newPassword || undefined,
+                                          {
+                                            accountId: adm.accountId,
+                                            fullName: draft.fullName,
+                                            title: draft.title,
+                                          }
+                                        );
+                                        if (!res.ok) {
+                                          setAo2ErrorMessage(
+                                            res.error || 'Failed to update AO-II credentials.'
+                                          );
+                                          return;
+                                        }
+                                        setAo2AdminDrafts((p) => ({
+                                          ...p,
+                                          [adm.accountId]: { ...draft, newPassword: '' },
+                                        }));
+                                        setAo2SaveMessage(
+                                          `Updated AO-II Administrator account (${draft.fullName} · @${draft.username}).`
+                                        );
+                                      }}
+                                      style={{ backgroundColor: frontendConfig.accentColor }}
+                                      className="px-3 py-2 text-xs font-semibold text-white rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                                    >
+                                      Save
+                                    </button>
+
+                                    {ao2AdminAccountsList.length > 1 &&
+                                      onAo2DeleteAdminAccount &&
+                                      (isConfirmingDel ? (
+                                        <div className="inline-flex items-center gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              setAo2SaveMessage('');
+                                              setAo2ErrorMessage('');
+                                              const res = await onAo2DeleteAdminAccount(
+                                                adm.accountId
+                                              );
+                                              setConfirmDeleteAdminId(null);
+                                              if (!res.ok) {
+                                                setAo2ErrorMessage(
+                                                  res.error ||
+                                                    'Could not delete administrator account.'
+                                                );
+                                                return;
+                                              }
+                                              setAo2SaveMessage(
+                                                `Deleted AO-II Administrator account (${adm.fullName}).`
+                                              );
+                                            }}
+                                            className="px-2 py-2 text-[11px] font-semibold bg-[#B91C1C] text-white rounded-lg cursor-pointer"
+                                          >
+                                            Confirm
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setConfirmDeleteAdminId(null)}
+                                            className="px-2 py-2 text-[11px] border border-[#DCE0E6] text-[#525866] rounded-lg cursor-pointer"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => setConfirmDeleteAdminId(adm.accountId)}
+                                          aria-label={`Delete ${adm.fullName}`}
+                                          className="p-2 text-xs font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] rounded-lg cursor-pointer"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      ))}
+                                  </div>
                                 </div>
                               </div>
                             );
@@ -5098,164 +5978,468 @@ export function PortalWorkspace({
                         </div>
                       </div>
 
-                      {/* Principal & AO-II Credential Administration */}
-                      <div className="bg-white rounded-xl border border-[#E2E5E9] p-6 space-y-5">
-                        <div>
-                          <h4 className="font-display text-lg font-semibold text-[#111315]">
-                            Principal &amp; AO-II Administrator Credentials
-                          </h4>
-                          <p className="text-xs text-[#525866]">
-                            Manage login usernames and reset passwords for the School Principal and
-                            AO-II Administrator accounts.
-                          </p>
-                        </div>
-
-                        <div className="divide-y divide-[#E2E5E9]">
-                          {/* Principal Credential Row */}
-                          <div className="py-5 grid grid-cols-1 lg:grid-cols-12 gap-4 items-end">
-                            <div className="lg:col-span-4 space-y-1">
-                              <div className="text-sm font-semibold text-[#111315]">
-                                Dr. Elena Vance — School Principal
+                      {/* Add Staff & Portal Account Dialog Box Modal */}
+                      {showAddAccountModal && (
+                        <div
+                          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#0B1426]/60 backdrop-blur-xs"
+                          role="dialog"
+                          aria-modal="true"
+                          aria-labelledby="add-account-modal-title"
+                          onClick={(e) => {
+                            if (e.target === e.currentTarget && !isCreatingAccount) {
+                              setShowAddAccountModal(false);
+                            }
+                          }}
+                        >
+                          <div className="w-full max-w-2xl bg-white rounded-2xl border border-[#CBDAD0] shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
+                            <div className="px-6 py-4 bg-[#0B291E] text-white flex items-center justify-between gap-4">
+                              <div>
+                                <div className="text-[11px] font-semibold text-[#A7F3D0]">
+                                  AO-II Account &amp; Personnel Provisioning
+                                </div>
+                                <h3
+                                  id="add-account-modal-title"
+                                  className="font-display text-lg font-semibold"
+                                >
+                                  Add New Staff &amp; Portal Account
+                                </h3>
                               </div>
-                              <div className="text-xs text-[#525866]">
-                                Cross-Faculty Document Archive Oversight
-                              </div>
-                              <div className="text-[11px] font-mono text-[#525866]">
-                                Updated: {principalAccount?.updatedAt ?? 'Default'}
-                              </div>
-                            </div>
-
-                            <div className="lg:col-span-3">
-                              <label className="block text-xs font-semibold text-[#111315] mb-1">
-                                Principal Username
-                              </label>
-                              <input
-                                type="text"
-                                value={principalDraft.username}
-                                onChange={(e) =>
-                                  setPrincipalDraft((p) => ({ ...p, username: e.target.value }))
-                                }
-                                className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
-                              />
-                            </div>
-
-                            <div className="lg:col-span-3">
-                              <label className="block text-xs font-semibold text-[#111315] mb-1">
-                                Set / Reset Password
-                              </label>
-                              <input
-                                type="password"
-                                value={principalDraft.newPassword}
-                                placeholder="Leave blank to keep current"
-                                onChange={(e) =>
-                                  setPrincipalDraft((p) => ({ ...p, newPassword: e.target.value }))
-                                }
-                                className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
-                              />
-                            </div>
-
-                            <div className="lg:col-span-2 flex justify-end">
                               <button
                                 type="button"
-                                onClick={async () => {
-                                  setAo2SaveMessage('');
-                                  setAo2ErrorMessage('');
-                                  const res = await onAo2UpdatePrincipalAccount(
-                                    principalDraft.username,
-                                    principalDraft.newPassword || undefined
-                                  );
+                                onClick={() => setShowAddAccountModal(false)}
+                                disabled={isCreatingAccount}
+                                aria-label="Close modal"
+                                className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/10 cursor-pointer"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+
+                            <form
+                              onSubmit={async (e) => {
+                                e.preventDefault();
+                                setAo2SaveMessage('');
+                                setAo2ErrorMessage('');
+                                setIsCreatingAccount(true);
+
+                                if (addAccountMode === 'portal') {
+                                  const res = await onAo2CreateTeacherAccount({
+                                    fullName: newAccFullName.trim(),
+                                    title: newAccTitle.trim() || 'Classroom Adviser',
+                                    department: newAccDepartment.trim() || 'General Faculty',
+                                    assignedGradeId: newAccGradeId,
+                                    assignedGradeLabel: newAccGradeLabel.trim(),
+                                    room: newAccRoom.trim() || 'Main Building',
+                                    email: newAccEmail.trim(),
+                                    employmentStatus: newAccStatus,
+                                    username: newAccUsername.trim(),
+                                    newPassword: newAccPassword.trim(),
+                                  });
+                                  setIsCreatingAccount(false);
                                   if (!res.ok) {
                                     setAo2ErrorMessage(
-                                      res.error || 'Failed to update Principal credentials.'
+                                      res.error || 'Could not create teacher portal account.'
                                     );
                                     return;
                                   }
-                                  setPrincipalDraft((p) => ({ ...p, newPassword: '' }));
                                   setAo2SaveMessage(
-                                    `Updated Principal login credentials (@${principalDraft.username}).`
+                                    `Created Teacher Portal account for ${newAccFullName.trim()} (@${newAccUsername.trim()}).`
                                   );
-                                }}
-                                style={{ backgroundColor: frontendConfig.accentColor }}
-                                className="w-full lg:w-auto px-4 py-2 text-xs font-semibold text-white rounded-lg cursor-pointer whitespace-nowrap"
-                              >
-                                Save Principal
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* AO-II Own Credential Row */}
-                          <div className="py-5 grid grid-cols-1 lg:grid-cols-12 gap-4 items-end">
-                            <div className="lg:col-span-4 space-y-1">
-                              <div className="text-sm font-semibold text-[#111315]">
-                                Administrative Officer II (AO-II)
-                              </div>
-                              <div className="text-xs text-[#525866]">
-                                Full Front-End &amp; Back-End System Console
-                              </div>
-                              <div className="text-[11px] font-mono text-[#525866]">
-                                Updated: {ao2Account?.updatedAt ?? 'Default'}
-                              </div>
-                            </div>
-
-                            <div className="lg:col-span-3">
-                              <label className="block text-xs font-semibold text-[#111315] mb-1">
-                                AO-II Username
-                              </label>
-                              <input
-                                type="text"
-                                value={ao2OwnDraft.username}
-                                onChange={(e) =>
-                                  setAo2OwnDraft((p) => ({ ...p, username: e.target.value }))
-                                }
-                                className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
-                              />
-                            </div>
-
-                            <div className="lg:col-span-3">
-                              <label className="block text-xs font-semibold text-[#111315] mb-1">
-                                Update Password
-                              </label>
-                              <input
-                                type="password"
-                                value={ao2OwnDraft.newPassword}
-                                placeholder="Leave blank to keep current"
-                                onChange={(e) =>
-                                  setAo2OwnDraft((p) => ({ ...p, newPassword: e.target.value }))
-                                }
-                                className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
-                              />
-                            </div>
-
-                            <div className="lg:col-span-2 flex justify-end">
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  setAo2SaveMessage('');
-                                  setAo2ErrorMessage('');
-                                  const res = await onAo2UpdateOwnAccount(
-                                    ao2OwnDraft.username,
-                                    ao2OwnDraft.newPassword || undefined
-                                  );
+                                } else if (addAccountMode === 'admin') {
+                                  if (!onAo2CreateAdminAccount) {
+                                    setIsCreatingAccount(false);
+                                    return;
+                                  }
+                                  const res = await onAo2CreateAdminAccount({
+                                    fullName: newAccFullName.trim(),
+                                    title:
+                                      newAccTitle.trim() || 'Administrative Officer II (AO-II)',
+                                    department:
+                                      newAccDepartment.trim() ||
+                                      'Records, Enrollment & Property Supply',
+                                    room: newAccRoom.trim() || 'Administration Building',
+                                    email: newAccEmail.trim(),
+                                    employmentStatus: newAccStatus,
+                                    username: newAccUsername.trim(),
+                                    newPassword: newAccPassword.trim(),
+                                    setAsPrimary: newAccSetPrimaryAdmin,
+                                  });
+                                  setIsCreatingAccount(false);
                                   if (!res.ok) {
                                     setAo2ErrorMessage(
-                                      res.error || 'Failed to update AO-II credentials.'
+                                      res.error || 'Could not create AO-II administrator account.'
                                     );
                                     return;
                                   }
-                                  setAo2OwnDraft((p) => ({ ...p, newPassword: '' }));
                                   setAo2SaveMessage(
-                                    `Updated AO-II Administrator credentials (@${ao2OwnDraft.username}).`
+                                    `Created AO-II Administrator account for ${newAccFullName.trim()} (@${newAccUsername.trim()})${newAccSetPrimaryAdmin ? ' and set as Primary Sign-In Administrator' : ''}.`
                                   );
-                                }}
-                                style={{ backgroundColor: frontendConfig.accentColor }}
-                                className="w-full lg:w-auto px-4 py-2 text-xs font-semibold text-white rounded-lg cursor-pointer whitespace-nowrap"
-                              >
-                                Save AO-II
-                              </button>
-                            </div>
+                                } else if (addAccountMode === 'principal') {
+                                  if (!onAo2CreatePrincipalAccount) {
+                                    setIsCreatingAccount(false);
+                                    return;
+                                  }
+                                  const res = await onAo2CreatePrincipalAccount({
+                                    fullName: newAccFullName.trim(),
+                                    title: newAccTitle.trim() || 'School Principal',
+                                    department:
+                                      newAccDepartment.trim() || 'Office of the School Principal',
+                                    room: newAccRoom.trim() || 'Administration Wing · Office 101',
+                                    email: newAccEmail.trim(),
+                                    employmentStatus: newAccStatus,
+                                    username: newAccUsername.trim(),
+                                    newPassword: newAccPassword.trim(),
+                                  });
+                                  setIsCreatingAccount(false);
+                                  if (!res.ok) {
+                                    setAo2ErrorMessage(
+                                      res.error || 'Could not create Principal account.'
+                                    );
+                                    return;
+                                  }
+                                  setAo2SaveMessage(
+                                    `Created School Principal account for ${newAccFullName.trim()} (@${newAccUsername.trim()}).`
+                                  );
+                                } else {
+                                  const res = await onAo2AddStaffRecord({
+                                    fullName: newAccFullName.trim(),
+                                    role: newAccRole,
+                                    title: newAccTitle.trim() || newAccRole,
+                                    department: newAccDepartment.trim() || 'General Faculty',
+                                    assignedGradeId: newAccGradeId,
+                                    assignedGradeLabel: newAccGradeLabel.trim(),
+                                    email: newAccEmail.trim(),
+                                    phone: '+63 (56) 555-0184',
+                                    room: newAccRoom.trim() || 'Main Building',
+                                    officeHours: 'Mon–Fri · 3:00 p.m. – 4:00 p.m.',
+                                    employmentStatus: newAccStatus,
+                                    createPortalLogin: false,
+                                  });
+                                  setIsCreatingAccount(false);
+                                  if (!res.ok) {
+                                    setAo2ErrorMessage(
+                                      res.error || 'Could not add staff member.'
+                                    );
+                                    return;
+                                  }
+                                  setAo2SaveMessage(
+                                    `Added staff record "${newAccFullName.trim()}" (${newAccRole}) to database.`
+                                  );
+                                }
+
+                                setNewAccFullName('');
+                                setNewAccEmail('');
+                                setNewAccUsername('');
+                                setNewAccPassword('');
+                                setShowAddAccountModal(false);
+                              }}
+                              className="p-6 space-y-4 overflow-y-auto"
+                            >
+                              <div className="flex flex-wrap items-center gap-2 p-1 rounded-lg bg-[#F8F9FA] border border-[#E2E5E9] w-fit">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAddAccountMode('portal');
+                                    setNewAccRole('Teacher');
+                                    setNewAccTitle('Classroom Adviser');
+                                  }}
+                                  className={`px-3 py-1.5 text-xs font-semibold rounded-md cursor-pointer ${
+                                    addAccountMode === 'portal'
+                                      ? 'bg-[#0B291E] text-white'
+                                      : 'text-[#525866] hover:text-[#111315]'
+                                  }`}
+                                >
+                                  Teacher Portal Account
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAddAccountMode('admin');
+                                    setNewAccRole('Administrative Officer');
+                                    setNewAccTitle('Administrative Officer II (AO-II)');
+                                    setNewAccDepartment('Records, Enrollment & Property Supply');
+                                    setNewAccRoom('Administration Wing · Registrar Desk');
+                                  }}
+                                  className={`px-3 py-1.5 text-xs font-semibold rounded-md cursor-pointer ${
+                                    addAccountMode === 'admin'
+                                      ? 'bg-[#0B291E] text-white'
+                                      : 'text-[#525866] hover:text-[#111315]'
+                                  }`}
+                                >
+                                  AO-II Administrator Account
+                                </button>
+                                {!principalAccount && onAo2CreatePrincipalAccount && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setAddAccountMode('principal');
+                                      setNewAccRole('Principal');
+                                      setNewAccTitle('School Principal');
+                                      setNewAccDepartment('Office of the School Principal');
+                                      setNewAccRoom('Administration Wing · Office 101');
+                                    }}
+                                    className={`px-3 py-1.5 text-xs font-semibold rounded-md cursor-pointer ${
+                                      addAccountMode === 'principal'
+                                        ? 'bg-[#0B291E] text-white'
+                                        : 'text-[#525866] hover:text-[#111315]'
+                                    }`}
+                                  >
+                                    Principal Account
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setAddAccountMode('staff')}
+                                  className={`px-3 py-1.5 text-xs font-semibold rounded-md cursor-pointer ${
+                                    addAccountMode === 'staff'
+                                      ? 'bg-[#0B291E] text-white'
+                                      : 'text-[#525866] hover:text-[#111315]'
+                                  }`}
+                                >
+                                  Staff Record Only (No Login)
+                                </button>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                  <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                    Full Name *
+                                  </label>
+                                  <input
+                                    type="text"
+                                    required
+                                    value={newAccFullName}
+                                    onChange={(e) => setNewAccFullName(e.target.value)}
+                                    placeholder="e.g., Clarissa Dizon, LPT"
+                                    className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                  />
+                                </div>
+
+                                {addAccountMode === 'staff' ? (
+                                  <div>
+                                    <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                      Staff Role *
+                                    </label>
+                                    <select
+                                      value={newAccRole}
+                                      onChange={(e) =>
+                                        setNewAccRole(e.target.value as StaffMemberRecord['role'])
+                                      }
+                                      className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                    >
+                                      <option value="Teacher">Teacher</option>
+                                      <option value="Support Staff">Support Staff</option>
+                                      <option value="Administrative Officer">
+                                        Administrative Officer
+                                      </option>
+                                    </select>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                      Position / Title *
+                                    </label>
+                                    <input
+                                      type="text"
+                                      required
+                                      value={newAccTitle}
+                                      onChange={(e) => setNewAccTitle(e.target.value)}
+                                      placeholder="e.g., Grade 1 Primary Adviser"
+                                      className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                    />
+                                  </div>
+                                )}
+
+                                <div>
+                                  <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                    Department / Subject Area
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={newAccDepartment}
+                                    onChange={(e) => setNewAccDepartment(e.target.value)}
+                                    className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                  />
+                                </div>
+
+                                {addAccountMode !== 'admin' && addAccountMode !== 'principal' && (
+                                  <>
+                                    <div>
+                                      <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                        Assigned Grade Level
+                                      </label>
+                                      <select
+                                        value={newAccGradeId}
+                                        onChange={(e) => {
+                                          const gId = e.target.value;
+                                          const labels: Record<string, string> = {
+                                            k: 'Kindergarten · Primary Division',
+                                            g1: 'Grade 1 · Primary Division',
+                                            g2: 'Grade 2 · Primary Division',
+                                            g3: 'Grade 3 · Primary Division',
+                                            g4: 'Grade 4 · Intermediate Division',
+                                            g5: 'Grade 5 · Intermediate Division',
+                                            g6: 'Grade 6 · Intermediate Division',
+                                            all: 'School-Wide Oversight (K–6)',
+                                          };
+                                          setNewAccGradeId(gId);
+                                          setNewAccGradeLabel(labels[gId] ?? 'General Assignment');
+                                        }}
+                                        className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                      >
+                                        <option value="k">Kindergarten</option>
+                                        <option value="g1">Grade 1</option>
+                                        <option value="g2">Grade 2</option>
+                                        <option value="g3">Grade 3</option>
+                                        <option value="g4">Grade 4</option>
+                                        <option value="g5">Grade 5</option>
+                                        <option value="g6">Grade 6</option>
+                                        <option value="all">All Grades (K–6)</option>
+                                      </select>
+                                    </div>
+
+                                    <div>
+                                      <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                        Grade &amp; Section Label
+                                      </label>
+                                      <input
+                                        type="text"
+                                        value={newAccGradeLabel}
+                                        onChange={(e) => setNewAccGradeLabel(e.target.value)}
+                                        className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                      />
+                                    </div>
+                                  </>
+                                )}
+
+                                <div>
+                                  <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                    Classroom / Station
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={newAccRoom}
+                                    onChange={(e) => setNewAccRoom(e.target.value)}
+                                    className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                    School Email
+                                  </label>
+                                  <input
+                                    type="email"
+                                    value={newAccEmail}
+                                    onChange={(e) => setNewAccEmail(e.target.value)}
+                                    placeholder="name@danloges.edu.ph"
+                                    className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-semibold text-[#111315] mb-1">
+                                    Employment Status
+                                  </label>
+                                  <select
+                                    value={newAccStatus}
+                                    onChange={(e) =>
+                                      setNewAccStatus(
+                                        e.target.value as StaffMemberRecord['employmentStatus']
+                                      )
+                                    }
+                                    className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
+                                  >
+                                    <option value="Regular / Permanent">Regular / Permanent</option>
+                                    <option value="Contractual">Contractual</option>
+                                    <option value="Volunteer">Volunteer</option>
+                                    <option value="On Leave">On Leave</option>
+                                  </select>
+                                </div>
+                              </div>
+
+                              {(addAccountMode === 'portal' ||
+                                addAccountMode === 'admin' ||
+                                addAccountMode === 'principal') && (
+                                <div className="p-4 rounded-xl bg-[#F4F8F6] border border-[#CBDAD0] space-y-3">
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                      <label className="block text-xs font-semibold text-[#0B291E] mb-1">
+                                        Portal Username *
+                                      </label>
+                                      <input
+                                        type="text"
+                                        required
+                                        value={newAccUsername}
+                                        onChange={(e) => setNewAccUsername(e.target.value)}
+                                        placeholder={
+                                          addAccountMode === 'admin'
+                                            ? 'e.g., r.gabrito'
+                                            : addAccountMode === 'principal'
+                                            ? 'e.g., principal.delacruz'
+                                            : 'e.g., c.dizon'
+                                        }
+                                        className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-[#DCE0E6] bg-white"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-semibold text-[#0B291E] mb-1">
+                                        Initial Password * (min 6 chars)
+                                      </label>
+                                      <input
+                                        type="password"
+                                        required
+                                        minLength={6}
+                                        value={newAccPassword}
+                                        onChange={(e) => setNewAccPassword(e.target.value)}
+                                        placeholder="At least 6 characters"
+                                        className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-white"
+                                      />
+                                    </div>
+                                  </div>
+                                  {addAccountMode === 'admin' && (
+                                    <label className="inline-flex items-center gap-2 text-xs font-semibold text-[#0B291E] cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={newAccSetPrimaryAdmin}
+                                        onChange={(e) => setNewAccSetPrimaryAdmin(e.target.checked)}
+                                      />
+                                      <span>
+                                        Use as Primary Administrator in AO-II Admin Console Sign In
+                                      </span>
+                                    </label>
+                                  )}
+                                </div>
+                              )}
+
+                              <div className="pt-3 border-t border-[#E2E5E9] flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  disabled={isCreatingAccount}
+                                  onClick={() => setShowAddAccountModal(false)}
+                                  className="px-4 py-2 text-xs font-semibold border border-[#DCE0E6] text-[#525866] rounded-lg cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="submit"
+                                  disabled={isCreatingAccount}
+                                  style={{ backgroundColor: frontendConfig.accentColor }}
+                                  className="px-5 py-2 text-xs font-semibold text-white rounded-lg cursor-pointer disabled:opacity-60"
+                                >
+                                  {isCreatingAccount
+                                    ? 'Saving to Database...'
+                                    : addAccountMode === 'admin'
+                                    ? 'Create AO-II Administrator'
+                                    : addAccountMode === 'portal'
+                                    ? 'Create Portal Account'
+                                    : 'Save Staff Record'}
+                                </button>
+                              </div>
+                            </form>
                           </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )}
 
@@ -5400,7 +6584,7 @@ export function PortalWorkspace({
                       </div>
 
                       {/* Collection Selector Grid */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2.5">
                         {[
                           {
                             id: 'enrollment' as const,
@@ -5411,9 +6595,33 @@ export function PortalWorkspace({
                                 (enrollmentByYear['2025-2026']?.length ?? 0),
                           },
                           {
+                            id: 'staffRecords' as const,
+                            label: 'Staff Records',
+                            count: dbOverview?.counts.staffRecords ?? staffRecords.length,
+                          },
+                          {
+                            id: 'studentRecords' as const,
+                            label: 'Student Records',
+                            count: dbOverview?.counts.studentRecords ?? studentRecords.length,
+                          },
+                          {
                             id: 'inventoryItems' as const,
                             label: 'Inventory',
                             count: dbOverview?.counts.inventoryItems ?? inventoryItems.length,
+                          },
+                          {
+                            id: 'materialRequisitions' as const,
+                            label: 'Requisitions',
+                            count:
+                              dbOverview?.counts.materialRequisitions ??
+                              materialRequisitions.length,
+                          },
+                          {
+                            id: 'leaveApplications' as const,
+                            label: 'Leave Forms',
+                            count:
+                              dbOverview?.counts.leaveApplications ??
+                              leaveApplications.length,
                           },
                           {
                             id: 'uploadedDocuments' as const,
@@ -5425,6 +6633,27 @@ export function PortalWorkspace({
                             label: 'Inquiries',
                             count:
                               dbOverview?.counts.admissionsSubmissions ?? admissionsSubmissions.length,
+                          },
+                          {
+                            id: 'homePosts' as const,
+                            label: 'Home Posts',
+                            count: dbOverview?.counts.homePosts ?? homePosts.length,
+                          },
+                          {
+                            id: 'activityPosts' as const,
+                            label: 'Activity Posts',
+                            count: dbOverview?.counts.activityPosts ?? activityPosts.length,
+                          },
+                          {
+                            id: 'teacherNotes' as const,
+                            label: 'Teacher Notes',
+                            count: dbOverview?.counts.teacherNotes ?? teacherNotes.length,
+                          },
+                          {
+                            id: 'studentDocFeedback' as const,
+                            label: 'Doc Feedback',
+                            count:
+                              dbOverview?.counts.studentDocFeedback ?? studentDocFeedback.length,
                           },
                           {
                             id: 'accounts' as const,
@@ -5841,6 +7070,236 @@ export function PortalWorkspace({
                         </div>
                       )}
 
+                      {/* Collection 2b: Material Requisitions */}
+                      {dbCollection === 'materialRequisitions' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Record ID</th>
+                                  <th className="py-3 px-4 font-semibold">Teacher</th>
+                                  <th className="py-3 px-4 font-semibold">Item / Material</th>
+                                  <th className="py-3 px-4 font-semibold">Qty</th>
+                                  <th className="py-3 px-4 font-semibold">AO-II Status</th>
+                                  <th className="py-3 px-4 font-semibold">Principal Status</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.materialRequisitions ?? materialRequisitions)
+                                  .filter((req) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      req.id.toLowerCase().includes(q) ||
+                                      req.teacherName.toLowerCase().includes(q) ||
+                                      req.itemName.toLowerCase().includes(q) ||
+                                      req.ao2Status.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((req) => {
+                                    const delKey = `materialRequisitions::${req.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    return (
+                                      <tr key={req.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {req.id}
+                                        </td>
+                                        <td className="py-3 px-4 font-medium text-[#111315]">
+                                          {req.teacherName}
+                                        </td>
+                                        <td className="py-3 px-4 font-semibold text-[#111315]">
+                                          {req.itemName}
+                                        </td>
+                                        <td className="py-3 px-4 font-mono tabular-nums">
+                                          {req.quantity} {req.unit}
+                                        </td>
+                                        <td className="py-3 px-4">{req.ao2Status}</td>
+                                        <td className="py-3 px-4 text-[#525866]">
+                                          {req.principalStatus ?? '—'}
+                                        </td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                disabled={dbBusyKey === delKey}
+                                                onClick={async () => {
+                                                  setDbBusyKey(delKey);
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'materialRequisitions',
+                                                    req.id
+                                                  );
+                                                  setDbBusyKey(null);
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (!res.ok) {
+                                                    setAo2ErrorMessage(
+                                                      res.error || 'Could not delete record.'
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                  setAo2SaveMessage(
+                                                    `Deleted material requisition ${req.id} from database.`
+                                                  );
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white hover:bg-[#991B1B] cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] font-semibold border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 2c: Leave Applications */}
+                      {dbCollection === 'leaveApplications' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Record ID</th>
+                                  <th className="py-3 px-4 font-semibold">Applicant</th>
+                                  <th className="py-3 px-4 font-semibold">Leave Type</th>
+                                  <th className="py-3 px-4 font-semibold">Inclusive Dates</th>
+                                  <th className="py-3 px-4 font-semibold">Days</th>
+                                  <th className="py-3 px-4 font-semibold">AO-II Endorsement</th>
+                                  <th className="py-3 px-4 font-semibold">Principal Decision</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.leaveApplications ?? leaveApplications)
+                                  .filter((app) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      app.id.toLowerCase().includes(q) ||
+                                      app.applicantName.toLowerCase().includes(q) ||
+                                      app.leaveType.toLowerCase().includes(q) ||
+                                      (app.ao2EndorsementStatus ?? '').toLowerCase().includes(q) ||
+                                      app.principalStatus.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((app) => {
+                                    const delKey = `leaveApplications::${app.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    return (
+                                      <tr key={app.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {app.id}
+                                        </td>
+                                        <td className="py-3 px-4 font-medium text-[#111315]">
+                                          {app.applicantName}{' '}
+                                          <span className="text-[11px] text-[#525866]">
+                                            ({app.applicantRole})
+                                          </span>
+                                        </td>
+                                        <td className="py-3 px-4 font-semibold text-[#111315]">
+                                          {app.leaveType}
+                                        </td>
+                                        <td className="py-3 px-4 font-mono text-[11px]">
+                                          {app.startDate} → {app.endDate}
+                                        </td>
+                                        <td className="py-3 px-4 font-mono tabular-nums">
+                                          {app.numberOfDays}
+                                        </td>
+                                        <td className="py-3 px-4">
+                                          {app.ao2EndorsementStatus ?? 'Pending Endorsement'}
+                                        </td>
+                                        <td className="py-3 px-4">{app.principalStatus}</td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                disabled={dbBusyKey === delKey}
+                                                onClick={async () => {
+                                                  setDbBusyKey(delKey);
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'leaveApplications',
+                                                    app.id
+                                                  );
+                                                  setDbBusyKey(null);
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (!res.ok) {
+                                                    setAo2ErrorMessage(
+                                                      res.error || 'Could not delete record.'
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                  setAo2SaveMessage(
+                                                    `Deleted leave application ${app.id} from database.`
+                                                  );
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white hover:bg-[#991B1B] cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] font-semibold border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
                       {/* Collection 3: Uploaded Documents */}
                       {dbCollection === 'uploadedDocuments' && (
                         <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
@@ -5872,8 +7331,10 @@ export function PortalWorkspace({
                                     const delKey = `uploadedDocuments::${doc.id}`;
                                     const confirming = dbConfirmDeleteKey === delKey;
                                     const teacherName =
-                                      TEACHER_PORTAL_PROFILES.find((t) => t.id === doc.teacherId)
-                                        ?.name ?? doc.teacherId;
+                                      mergedTeacherProfiles.find((t) => t.id === doc.teacherId)
+                                        ?.name ??
+                                      staffRecords.find((s) => s.id === doc.teacherId)?.fullName ??
+                                      doc.teacherId;
                                     return (
                                       <tr key={doc.id} className="hover:bg-[#F8FAFC]">
                                         <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
@@ -6101,76 +7562,257 @@ export function PortalWorkspace({
                                   <th className="py-2.5 px-3 font-semibold">Username</th>
                                   <th className="py-2.5 px-3 font-semibold">Password Policy</th>
                                   <th className="py-2.5 px-3 font-semibold">Updated At</th>
+                                  <th className="py-2.5 px-3 font-semibold text-right">Action</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-[#E2E5E9]">
-                                {(dbOverview?.data.teacherAccounts ?? teacherAccounts).map((acc) => (
-                                  <tr key={acc.teacherId}>
-                                    <td className="py-2.5 px-3 font-semibold text-[#111315]">
-                                      Teacher
-                                    </td>
-                                    <td className="py-2.5 px-3 font-mono text-[#525866]">
-                                      {acc.teacherId}
-                                    </td>
-                                    <td className="py-2.5 px-3 font-mono">@{acc.username}</td>
-                                    <td className="py-2.5 px-3">
-                                      {acc.hasCustomPassword
-                                        ? 'Custom Password Set'
-                                        : 'Default Password'}
-                                    </td>
-                                    <td className="py-2.5 px-3 font-mono text-[11px] text-[#525866]">
-                                      {acc.updatedAt}
-                                    </td>
-                                  </tr>
-                                ))}
-                                {(dbOverview?.data.principalAccount ?? principalAccount) && (
-                                  <tr>
-                                    <td className="py-2.5 px-3 font-semibold text-[#111315]">
-                                      Principal
-                                    </td>
-                                    <td className="py-2.5 px-3 font-mono text-[#525866]">
-                                      principal
-                                    </td>
-                                    <td className="py-2.5 px-3 font-mono">
-                                      @
-                                      {
-                                        (dbOverview?.data.principalAccount ?? principalAccount)!
-                                          .username
-                                      }
-                                    </td>
-                                    <td className="py-2.5 px-3">
-                                      {(dbOverview?.data.principalAccount ?? principalAccount)!
-                                        .hasCustomPassword
-                                        ? 'Custom Password Set'
-                                        : 'Default Password'}
-                                    </td>
-                                    <td className="py-2.5 px-3 font-mono text-[11px] text-[#525866]">
-                                      {
-                                        (dbOverview?.data.principalAccount ?? principalAccount)!
-                                          .updatedAt
-                                      }
-                                    </td>
-                                  </tr>
-                                )}
-                                {(dbOverview?.data.ao2Account ?? ao2Account) && (
-                                  <tr>
-                                    <td className="py-2.5 px-3 font-semibold text-[#047857]">
-                                      AO-II (Admin)
-                                    </td>
-                                    <td className="py-2.5 px-3 font-mono text-[#525866]">ao2</td>
-                                    <td className="py-2.5 px-3 font-mono">
-                                      @{(dbOverview?.data.ao2Account ?? ao2Account)!.username}
-                                    </td>
-                                    <td className="py-2.5 px-3">
-                                      {(dbOverview?.data.ao2Account ?? ao2Account)!.hasCustomPassword
-                                        ? 'Custom Password Set'
-                                        : 'Default Password'}
-                                    </td>
-                                    <td className="py-2.5 px-3 font-mono text-[11px] text-[#525866]">
-                                      {(dbOverview?.data.ao2Account ?? ao2Account)!.updatedAt}
-                                    </td>
-                                  </tr>
-                                )}
+                                {(dbOverview?.data.teacherAccounts ?? teacherAccounts).map((acc) => {
+                                  const delKey = `teacherAccounts::${acc.teacherId}`;
+                                  const confirming = dbConfirmDeleteKey === delKey;
+                                  return (
+                                    <tr key={acc.teacherId}>
+                                      <td className="py-2.5 px-3 font-semibold text-[#111315]">
+                                        Teacher
+                                      </td>
+                                      <td className="py-2.5 px-3 font-mono text-[#525866]">
+                                        {acc.teacherId}
+                                      </td>
+                                      <td className="py-2.5 px-3 font-mono">@{acc.username}</td>
+                                      <td className="py-2.5 px-3">
+                                        {acc.hasCustomPassword
+                                          ? 'Custom Password Set'
+                                          : 'Default Password'}
+                                      </td>
+                                      <td className="py-2.5 px-3 font-mono text-[11px] text-[#525866]">
+                                        {acc.updatedAt}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                                        {confirming ? (
+                                          <div className="inline-flex items-center gap-1.5">
+                                            <button
+                                              type="button"
+                                              disabled={dbBusyKey === delKey}
+                                              onClick={async () => {
+                                                setDbBusyKey(delKey);
+                                                const res = await onAo2DeleteDbRecord(
+                                                  'teacherAccounts',
+                                                  acc.teacherId
+                                                );
+                                                setDbBusyKey(null);
+                                                setDbConfirmDeleteKey(null);
+                                                if (!res.ok) {
+                                                  setAo2ErrorMessage(
+                                                    res.error || 'Could not delete account.'
+                                                  );
+                                                  return;
+                                                }
+                                                if (res.overview) {
+                                                  setDbOverview(res.overview);
+                                                  setDbJsonDraft(
+                                                    JSON.stringify(res.overview.data, null, 2)
+                                                  );
+                                                }
+                                                setAo2SaveMessage(
+                                                  `Deleted portal account @${acc.username} from database.`
+                                                );
+                                              }}
+                                              className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white cursor-pointer"
+                                            >
+                                              Confirm Delete
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(null)}
+                                              className="px-2 py-1 rounded-md text-[11px] border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            onClick={() => setDbConfirmDeleteKey(delKey)}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                            <span>Delete</span>
+                                          </button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                                {(dbOverview?.data.principalAccount ?? principalAccount) && (() => {
+                                  const pAcc = (dbOverview?.data.principalAccount ?? principalAccount)!;
+                                  const pDelKey = 'principalAccount::principal';
+                                  const pConfirming = dbConfirmDeleteKey === pDelKey;
+                                  return (
+                                    <tr>
+                                      <td className="py-2.5 px-3 font-semibold text-[#111315]">
+                                        Principal
+                                      </td>
+                                      <td className="py-2.5 px-3 font-mono text-[#525866]">
+                                        {principalStaffRecord?.id ?? 'principal'}
+                                      </td>
+                                      <td className="py-2.5 px-3 font-mono">
+                                        @{pAcc.username}{' '}
+                                        {principalStaffRecord && (
+                                          <span className="font-sans text-[#525866]">
+                                            ({principalStaffRecord.fullName})
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="py-2.5 px-3">
+                                        {pAcc.hasCustomPassword
+                                          ? 'Custom Password Set'
+                                          : 'Default Password'}
+                                      </td>
+                                      <td className="py-2.5 px-3 font-mono text-[11px] text-[#525866]">
+                                        {pAcc.updatedAt}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                                        {pConfirming ? (
+                                          <div className="inline-flex items-center gap-1.5">
+                                            <button
+                                              type="button"
+                                              disabled={dbBusyKey === pDelKey}
+                                              onClick={async () => {
+                                                setDbBusyKey(pDelKey);
+                                                const res = await onAo2DeleteDbRecord(
+                                                  'principalAccount',
+                                                  'principal'
+                                                );
+                                                setDbBusyKey(null);
+                                                setDbConfirmDeleteKey(null);
+                                                if (!res.ok) {
+                                                  setAo2ErrorMessage(
+                                                    res.error || 'Could not delete Principal account.'
+                                                  );
+                                                  return;
+                                                }
+                                                if (res.overview) {
+                                                  setDbOverview(res.overview);
+                                                  setDbJsonDraft(
+                                                    JSON.stringify(res.overview.data, null, 2)
+                                                  );
+                                                }
+                                                setAo2SaveMessage(
+                                                  `Deleted Principal account @${pAcc.username}.`
+                                                );
+                                              }}
+                                              className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white cursor-pointer"
+                                            >
+                                              Confirm Delete
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(null)}
+                                              className="px-2 py-1 rounded-md text-[11px] border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            onClick={() => setDbConfirmDeleteKey(pDelKey)}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                            <span>Delete</span>
+                                          </button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })()}
+                                {(dbOverview?.data.ao2Accounts ?? ao2AdminAccountsList).map((adm, _, arr) => {
+                                  const delKey = `ao2Accounts::${adm.accountId}`;
+                                  const confirming = dbConfirmDeleteKey === delKey;
+                                  const isLastAo2 = arr.length <= 1;
+                                  return (
+                                    <tr key={adm.accountId}>
+                                      <td className="py-2.5 px-3 font-semibold text-[#047857]">
+                                        AO-II (Admin)
+                                      </td>
+                                      <td className="py-2.5 px-3 font-mono text-[#525866]">
+                                        {adm.accountId}
+                                      </td>
+                                      <td className="py-2.5 px-3 font-mono">
+                                        @{adm.username}{' '}
+                                        <span className="font-sans text-[#525866]">
+                                          ({adm.fullName})
+                                        </span>
+                                      </td>
+                                      <td className="py-2.5 px-3">
+                                        {adm.hasCustomPassword
+                                          ? 'Custom Password Set'
+                                          : 'Default Password'}
+                                        {adm.isPrimary ? ' · Sign-In Primary' : ''}
+                                      </td>
+                                      <td className="py-2.5 px-3 font-mono text-[11px] text-[#525866]">
+                                        {adm.updatedAt}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                                        {isLastAo2 ? (
+                                          <span className="text-[11px] text-[#525866]">
+                                            Active Primary Admin
+                                          </span>
+                                        ) : confirming ? (
+                                          <div className="inline-flex items-center gap-1.5">
+                                            <button
+                                              type="button"
+                                              disabled={dbBusyKey === delKey}
+                                              onClick={async () => {
+                                                setDbBusyKey(delKey);
+                                                const res = await onAo2DeleteDbRecord(
+                                                  'ao2Accounts',
+                                                  adm.accountId
+                                                );
+                                                setDbBusyKey(null);
+                                                setDbConfirmDeleteKey(null);
+                                                if (!res.ok) {
+                                                  setAo2ErrorMessage(
+                                                    res.error || 'Could not delete admin account.'
+                                                  );
+                                                  return;
+                                                }
+                                                if (res.overview) {
+                                                  setDbOverview(res.overview);
+                                                  setDbJsonDraft(
+                                                    JSON.stringify(res.overview.data, null, 2)
+                                                  );
+                                                }
+                                                setAo2SaveMessage(
+                                                  `Deleted AO-II admin account @${adm.username}.`
+                                                );
+                                              }}
+                                              className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white cursor-pointer"
+                                            >
+                                              Confirm Delete
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(null)}
+                                              className="px-2 py-1 rounded-md text-[11px] border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            onClick={() => setDbConfirmDeleteKey(delKey)}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                            <span>Delete</span>
+                                          </button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
@@ -6254,6 +7896,579 @@ export function PortalWorkspace({
                                                 type="button"
                                                 onClick={() => setDbConfirmDeleteKey(null)}
                                                 className="px-2 py-1 rounded-md text-[11px] font-semibold border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 6b: Staff Records */}
+                      {dbCollection === 'staffRecords' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Record ID</th>
+                                  <th className="py-3 px-4 font-semibold">Full Name</th>
+                                  <th className="py-3 px-4 font-semibold">Role &amp; Grade</th>
+                                  <th className="py-3 px-4 font-semibold">Status</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.staffRecords ?? staffRecords)
+                                  .filter((s) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      s.id.toLowerCase().includes(q) ||
+                                      s.fullName.toLowerCase().includes(q) ||
+                                      s.role.toLowerCase().includes(q) ||
+                                      s.assignedGradeLabel.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((s) => {
+                                    const delKey = `staffRecords::${s.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    const allStaff = dbOverview?.data.staffRecords ?? staffRecords;
+                                    const ao2PortalCount = allStaff.filter(
+                                      (x) =>
+                                        x.role === 'Administrative Officer' &&
+                                        Boolean(x.portalUsername)
+                                    ).length;
+                                    const isProtected =
+                                      s.role === 'Administrative Officer' &&
+                                      Boolean(s.portalUsername) &&
+                                      ao2PortalCount <= 1;
+                                    return (
+                                      <tr key={s.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {s.id}
+                                        </td>
+                                        <td className="py-3 px-4 font-semibold text-[#111315]">
+                                          {s.fullName}
+                                        </td>
+                                        <td className="py-3 px-4 text-[#525866]">
+                                          {s.role} · {s.assignedGradeLabel}
+                                        </td>
+                                        <td className="py-3 px-4">{s.employmentStatus}</td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {isProtected ? (
+                                            <span className="text-[11px] text-[#525866]">
+                                              Active Primary Admin
+                                            </span>
+                                          ) : confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                disabled={dbBusyKey === delKey}
+                                                onClick={async () => {
+                                                  setDbBusyKey(delKey);
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'staffRecords',
+                                                    s.id
+                                                  );
+                                                  setDbBusyKey(null);
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (!res.ok) {
+                                                    setAo2ErrorMessage(
+                                                      res.error || 'Could not delete staff record.'
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                  setAo2SaveMessage(
+                                                    `Deleted staff record ${s.fullName}.`
+                                                  );
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 6c: Student Records */}
+                      {dbCollection === 'studentRecords' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">LRN / ID</th>
+                                  <th className="py-3 px-4 font-semibold">Student Name</th>
+                                  <th className="py-3 px-4 font-semibold">Grade &amp; Section</th>
+                                  <th className="py-3 px-4 font-semibold">Status</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.studentRecords ?? studentRecords)
+                                  .filter((st) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      st.id.toLowerCase().includes(q) ||
+                                      st.lrn.toLowerCase().includes(q) ||
+                                      st.studentName.toLowerCase().includes(q) ||
+                                      st.gradeLabel.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((st) => {
+                                    const delKey = `studentRecords::${st.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    return (
+                                      <tr key={st.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          <div>{st.lrn}</div>
+                                          <div>{st.id}</div>
+                                        </td>
+                                        <td className="py-3 px-4 font-semibold text-[#111315]">
+                                          {st.studentName}
+                                        </td>
+                                        <td className="py-3 px-4 text-[#525866]">
+                                          {st.gradeLabel} · {st.section} ({st.academicYear})
+                                        </td>
+                                        <td className="py-3 px-4">{st.enrollmentStatus}</td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                disabled={dbBusyKey === delKey}
+                                                onClick={async () => {
+                                                  setDbBusyKey(delKey);
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'studentRecords',
+                                                    st.id
+                                                  );
+                                                  setDbBusyKey(null);
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (!res.ok) {
+                                                    setAo2ErrorMessage(
+                                                      res.error || 'Could not delete student.'
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                  setAo2SaveMessage(
+                                                    `Deleted student record ${st.studentName}.`
+                                                  );
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 6d: Home Page Posts */}
+                      {dbCollection === 'homePosts' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Post ID</th>
+                                  <th className="py-3 px-4 font-semibold">Headline &amp; Category</th>
+                                  <th className="py-3 px-4 font-semibold">Author</th>
+                                  <th className="py-3 px-4 font-semibold">Created</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.homePosts ?? homePosts).map((hp) => {
+                                  const delKey = `homePosts::${hp.id}`;
+                                  const confirming = dbConfirmDeleteKey === delKey;
+                                  return (
+                                    <tr key={hp.id} className="hover:bg-[#F8FAFC]">
+                                      <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                        {hp.id}
+                                      </td>
+                                      <td className="py-3 px-4">
+                                        <div className="font-semibold text-[#111315]">{hp.title}</div>
+                                        <div className="text-[11px] text-[#525866]">{hp.category}</div>
+                                      </td>
+                                      <td className="py-3 px-4 text-[#525866]">
+                                        {hp.authorName} ({hp.authorRole})
+                                      </td>
+                                      <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                        {hp.createdAt}
+                                      </td>
+                                      <td className="py-3 px-4 text-right whitespace-nowrap">
+                                        {confirming ? (
+                                          <div className="inline-flex items-center gap-1.5">
+                                            <button
+                                              type="button"
+                                              onClick={async () => {
+                                                const res = await onAo2DeleteDbRecord(
+                                                  'homePosts',
+                                                  hp.id
+                                                );
+                                                setDbConfirmDeleteKey(null);
+                                                if (res.overview) {
+                                                  setDbOverview(res.overview);
+                                                  setDbJsonDraft(
+                                                    JSON.stringify(res.overview.data, null, 2)
+                                                  );
+                                                }
+                                              }}
+                                              className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white cursor-pointer"
+                                            >
+                                              Confirm Delete
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(null)}
+                                              className="px-2 py-1 rounded-md text-[11px] border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            onClick={() => setDbConfirmDeleteKey(delKey)}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                            <span>Delete</span>
+                                          </button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 6e: Activity Posts */}
+                      {dbCollection === 'activityPosts' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Activity ID</th>
+                                  <th className="py-3 px-4 font-semibold">Title &amp; Category</th>
+                                  <th className="py-3 px-4 font-semibold">Posted By</th>
+                                  <th className="py-3 px-4 font-semibold">Date Conducted</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.activityPosts ?? activityPosts).map((ap) => {
+                                  const delKey = `activityPosts::${ap.id}`;
+                                  const confirming = dbConfirmDeleteKey === delKey;
+                                  return (
+                                    <tr key={ap.id} className="hover:bg-[#F8FAFC]">
+                                      <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                        {ap.id}
+                                      </td>
+                                      <td className="py-3 px-4">
+                                        <div className="font-semibold text-[#111315]">{ap.title}</div>
+                                        <div className="text-[11px] text-[#525866]">{ap.category}</div>
+                                      </td>
+                                      <td className="py-3 px-4 text-[#525866]">
+                                        {ap.authorName} ({ap.authorRole})
+                                      </td>
+                                      <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                        {ap.dateConducted}
+                                      </td>
+                                      <td className="py-3 px-4 text-right whitespace-nowrap">
+                                        {confirming ? (
+                                          <div className="inline-flex items-center gap-1.5">
+                                            <button
+                                              type="button"
+                                              onClick={async () => {
+                                                const res = await onAo2DeleteDbRecord(
+                                                  'activityPosts',
+                                                  ap.id
+                                                );
+                                                setDbConfirmDeleteKey(null);
+                                                if (res.overview) {
+                                                  setDbOverview(res.overview);
+                                                  setDbJsonDraft(
+                                                    JSON.stringify(res.overview.data, null, 2)
+                                                  );
+                                                }
+                                              }}
+                                              className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white cursor-pointer"
+                                            >
+                                              Confirm Delete
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(null)}
+                                              className="px-2 py-1 rounded-md text-[11px] border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            onClick={() => setDbConfirmDeleteKey(delKey)}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                            <span>Delete</span>
+                                          </button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 6f: Teacher Advisory Notes */}
+                      {dbCollection === 'teacherNotes' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Note ID</th>
+                                  <th className="py-3 px-4 font-semibold">Author</th>
+                                  <th className="py-3 px-4 font-semibold">Advisory Note</th>
+                                  <th className="py-3 px-4 font-semibold">Timestamp</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.teacherNotes ?? teacherNotes)
+                                  .filter((n) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      n.id.toLowerCase().includes(q) ||
+                                      n.authorName.toLowerCase().includes(q) ||
+                                      n.text.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((n) => {
+                                    const delKey = `teacherNotes::${n.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    return (
+                                      <tr key={n.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {n.id}
+                                        </td>
+                                        <td className="py-3 px-4 font-semibold text-[#111315]">
+                                          {n.authorName}
+                                        </td>
+                                        <td className="py-3 px-4 text-[#525866] max-w-md">
+                                          {n.text}
+                                        </td>
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866] whitespace-nowrap">
+                                          {n.timestamp}
+                                        </td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                onClick={async () => {
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'teacherNotes',
+                                                    n.id
+                                                  );
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 6g: Student Document Feedback */}
+                      {dbCollection === 'studentDocFeedback' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Entry / Doc ID</th>
+                                  <th className="py-3 px-4 font-semibold">Teacher</th>
+                                  <th className="py-3 px-4 font-semibold">Feedback Comment</th>
+                                  <th className="py-3 px-4 font-semibold">Updated</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.studentDocFeedback ?? studentDocFeedback)
+                                  .filter((fb) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      fb.id.toLowerCase().includes(q) ||
+                                      fb.docId.toLowerCase().includes(q) ||
+                                      fb.authorName.toLowerCase().includes(q) ||
+                                      fb.comment.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((fb) => {
+                                    const delKey = `studentDocFeedback::${fb.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    return (
+                                      <tr key={fb.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          <div>{fb.id}</div>
+                                          <div>Doc: {fb.docId}</div>
+                                        </td>
+                                        <td className="py-3 px-4 font-semibold text-[#111315]">
+                                          {fb.authorName}
+                                        </td>
+                                        <td className="py-3 px-4 text-[#525866] max-w-md">
+                                          {fb.comment}
+                                        </td>
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866] whitespace-nowrap">
+                                          {fb.updatedAt}
+                                        </td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                onClick={async () => {
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'studentDocFeedback',
+                                                    fb.id
+                                                  );
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] border border-[#DCE0E6] text-[#525866] cursor-pointer"
                                               >
                                                 Cancel
                                               </button>

@@ -1,7 +1,7 @@
 import type { MouseEvent } from 'react';
 import { SiteFrontendConfig } from '../types/schoolConfig';
 
-export type AppPage = 'home' | 'academics' | 'enrollment' | 'portal';
+export type AppPage = 'home' | 'academics' | 'enrollment' | 'portal' | 'inventory';
 
 interface HeaderProps {
   frontendConfig: SiteFrontendConfig;

@@ -610,7 +610,7 @@ export const CAMPUS_FACILITIES: CampusFacility[] = [
     gradesServed: 'Kindergarten – Grade 6',
     capacityLabel: '516 Total Pupil Capacity',
     outcomeMetric: 'Pilar II District Model Eco-Campus · Clean & Green Awardee',
-    departmentChair: 'Dr. Elena Vance, School Principal',
+    departmentChair: 'Office of the School Principal',
     summary:
       'Sunlit brick-and-timber classroom wings frame a shaded central quad where morning flag assemblies, reading fairs, and recess games bring all seven grade levels together.',
     architecturalAndAcademicNotes:
@@ -723,7 +723,7 @@ export const SCHOOL_DISPATCHES: SchoolDispatch[] = [
       'Families across Pilar II are invited to tour Kindergarten–Grade 6 classrooms, visit the Eco-Garden, and view pupil science projects.',
     author: 'Office of the Principal',
     paragraphs: [
-      'Program opens at 9:00 a.m. at the Danlog Central Courtyard with a welcome address from School Principal Dr. Elena Vance and choral performance by Grades 4–6.',
+      'Program opens at 9:00 a.m. at the Danlog Central Courtyard with a welcome address from the Office of the School Principal and choral performance by Grades 4–6.',
       'Classrooms and the Science Room remain open until 11:30 a.m. for parents to meet homeroom advisers and inspect student portfolios.',
     ],
   },
@@ -905,7 +905,7 @@ export const SCHOOL_CALENDAR_EVENTS: CalendarActivityItem[] = [
     category: 'Community & PTA',
     timeRange: '9:00 a.m. – 11:30 a.m.',
     venue: 'Danlog Central Courtyard & Library',
-    details: 'Campus tour, classroom portfolio viewing, and Principal address with Dr. Elena Vance.',
+    details: 'Campus tour, classroom portfolio viewing, and Principal address.',
   },
   {
     id: 'cal-4',
