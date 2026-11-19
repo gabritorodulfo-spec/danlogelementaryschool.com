@@ -1,2 +1,1 @@
-rm bun.lock
-bun install
+rm -f bun.lock bun.lockb
