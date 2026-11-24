@@ -1,1 +1,1 @@
-bun install
+rm bun.lock
