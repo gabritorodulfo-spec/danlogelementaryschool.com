@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Calendar, Check, Clock, MapPin } from 'lucide-react';
 import {
   CalendarActivityItem,
@@ -8,15 +8,8 @@ import {
 
 interface SchoolCalendarProps {
   accentColor: string;
+  activities?: CalendarActivityItem[];
 }
-
-const MONTHS: CalendarMonthFilter[] = [
-  'All Months',
-  'November 2026',
-  'December 2026',
-  'January 2027',
-  'February 2027',
-];
 
 const DIVISION_SCOPES: ('All Divisions' | CalendarActivityItem['divisionScope'])[] = [
   'All Divisions',
@@ -25,21 +18,42 @@ const DIVISION_SCOPES: ('All Divisions' | CalendarActivityItem['divisionScope'])
   'Intermediate (4–6)',
 ];
 
-export function SchoolCalendar({ accentColor }: SchoolCalendarProps) {
+export function SchoolCalendar({
+  accentColor,
+  activities = SCHOOL_CALENDAR_EVENTS,
+}: SchoolCalendarProps) {
   const [selectedMonth, setSelectedMonth] = useState<CalendarMonthFilter>('All Months');
   const [selectedDivision, setSelectedDivision] = useState<
     'All Divisions' | CalendarActivityItem['divisionScope']
   >('All Divisions');
   const [savedEventIds, setSavedEventIds] = useState<string[]>([]);
 
+  const monthsList = useMemo<CalendarMonthFilter[]>(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    for (const ev of activities) {
+      if (ev.monthGroup && !seen.has(ev.monthGroup)) {
+        seen.add(ev.monthGroup);
+        list.push(ev.monthGroup);
+      }
+    }
+    return ['All Months', ...list];
+  }, [activities]);
+
+  useEffect(() => {
+    if (selectedMonth !== 'All Months' && !monthsList.includes(selectedMonth)) {
+      setSelectedMonth('All Months');
+    }
+  }, [monthsList, selectedMonth]);
+
   const visibleEvents = useMemo(() => {
-    return SCHOOL_CALENDAR_EVENTS.filter((ev) => {
+    return activities.filter((ev) => {
       const monthOk = selectedMonth === 'All Months' || ev.monthGroup === selectedMonth;
       const divOk =
         selectedDivision === 'All Divisions' || ev.divisionScope === selectedDivision;
       return monthOk && divOk;
     });
-  }, [selectedMonth, selectedDivision]);
+  }, [activities, selectedMonth, selectedDivision]);
 
   const toggleSaveReminder = (id: string) => {
     setSavedEventIds((prev) =>
@@ -78,7 +92,7 @@ export function SchoolCalendar({ accentColor }: SchoolCalendarProps) {
             aria-label="Filter calendar by month"
             className="inline-flex flex-wrap items-center gap-1 p-1 bg-[#EAF2ED] rounded-lg border border-[#D2DFD7]"
           >
-            {MONTHS.map((month) => {
+            {monthsList.map((month) => {
               const active = selectedMonth === month;
               return (
                 <button

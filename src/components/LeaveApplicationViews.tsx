@@ -43,6 +43,61 @@ function calculateInclusiveDays(startDate: string, endDate: string): number {
   return Math.max(1, Math.round(diffMs / (1000 * 60 * 60 * 24)) + 1);
 }
 
+const MAX_LEAVE_APPLICATIONS_PER_DATE = 4;
+
+function getRangeSlotSummary(
+  applications: LeaveApplication[],
+  startDate: string,
+  endDate: string,
+  excludeId?: string
+): {
+  overbooked: { date: string; count: number }[];
+  peakDate: string;
+  peakCount: number;
+} {
+  const startMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate);
+  const endMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(endDate);
+  if (!startMatch || !endMatch) {
+    return { overbooked: [], peakDate: startDate, peakCount: 0 };
+  }
+  const startMs = Date.UTC(
+    Number(startMatch[1]),
+    Number(startMatch[2]) - 1,
+    Number(startMatch[3])
+  );
+  const endMs = Date.UTC(Number(endMatch[1]), Number(endMatch[2]) - 1, Number(endMatch[3]));
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs) {
+    return { overbooked: [], peakDate: startDate, peakCount: 0 };
+  }
+
+  const overbooked: { date: string; count: number }[] = [];
+  let peakDate = startDate;
+  let peakCount = 0;
+
+  for (let ms = startMs, steps = 0; ms <= endMs && steps < 366; ms += 86400000, steps++) {
+    const d = new Date(ms);
+    const iso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(
+      d.getUTCDate()
+    ).padStart(2, '0')}`;
+    const count = applications.filter(
+      (app) =>
+        app.id !== excludeId &&
+        app.principalStatus !== 'Disapproved' &&
+        app.startDate <= iso &&
+        iso <= app.endDate
+    ).length;
+    if (count > peakCount) {
+      peakCount = count;
+      peakDate = iso;
+    }
+    if (count >= MAX_LEAVE_APPLICATIONS_PER_DATE) {
+      overbooked.push({ date: iso, count });
+    }
+  }
+
+  return { overbooked, peakDate, peakCount };
+}
+
 function todayIsoDate(): string {
   const now = new Date();
   const y = now.getFullYear();
@@ -213,6 +268,16 @@ export function LeaveApplicationWorkspace({
       return;
     }
 
+    const slotCheck = getRangeSlotSummary(leaveApplications, startDate, endDate);
+    if (slotCheck.overbooked.length > 0) {
+      setModalError(
+        `Daily leave application limit reached (maximum ${MAX_LEAVE_APPLICATIONS_PER_DATE} applications on the same date): ${slotCheck.overbooked
+          .map((c) => `${c.date} (${c.count}/${MAX_LEAVE_APPLICATIONS_PER_DATE})`)
+          .join(', ')}. Please choose another date.`
+      );
+      return;
+    }
+
     setSubmitting(true);
     const res = await onSubmitLeaveApplication({
       leaveType,
@@ -266,6 +331,23 @@ export function LeaveApplicationWorkspace({
     if (editReason.trim().length < 4) {
       setEditError('Reason must be at least 4 characters.');
       return;
+    }
+
+    if (editingApp.principalStatus !== 'Disapproved') {
+      const editSlotCheck = getRangeSlotSummary(
+        leaveApplications,
+        editStartDate,
+        editEndDate,
+        editingApp.id
+      );
+      if (editSlotCheck.overbooked.length > 0) {
+        setEditError(
+          `Daily leave application limit reached (maximum ${MAX_LEAVE_APPLICATIONS_PER_DATE} applications on the same date): ${editSlotCheck.overbooked
+            .map((c) => `${c.date} (${c.count}/${MAX_LEAVE_APPLICATIONS_PER_DATE})`)
+            .join(', ')}. Choose another date.`
+        );
+        return;
+      }
     }
 
     setEditSubmitting(true);
@@ -433,10 +515,10 @@ export function LeaveApplicationWorkspace({
           </h4>
           <p className="text-xs text-[#525866]">
             {mode === 'teacher'
-              ? 'Submit your leave application form here. AO-II reviews and endorses it to the School Principal for final approval or disapproval.'
+              ? 'Submit your leave application form here (daily cap: max 4 active applications per date). AO-II reviews and endorses it to the School Principal for final approval or disapproval.'
               : mode === 'principal'
-                ? 'Only leave applications endorsed by AO-II appear here for Principal approval or disapproval. You may also submit your own leave application (which goes through AO-II endorsement first).'
-                : 'Review all submitted leave applications, edit entries on any teacher or staff application, endorse applications so the Principal can see and decide on them, or submit your own leave application.'}
+                ? 'Only leave applications endorsed by AO-II appear here for Principal approval or disapproval (daily cap: max 4 active applications per date). You may also submit your own leave application.'
+                : 'Review all submitted leave applications, edit entries on any teacher or staff application, endorse applications to the Principal (daily cap: max 4 active applications per date), or submit your own leave application.'}
           </p>
         </div>
 
@@ -946,6 +1028,37 @@ export function LeaveApplicationWorkspace({
                 </div>
               </div>
 
+              {(() => {
+                if (!startDate || !endDate || endDate < startDate) return null;
+                const slot = getRangeSlotSummary(leaveApplications, startDate, endDate);
+                const full = slot.overbooked.length > 0;
+                return (
+                  <div
+                    className={`rounded-lg border px-3 py-2 text-[11px] font-medium ${
+                      full
+                        ? 'border-[#FECACA] bg-[#FEF2F2] text-[#B91C1C]'
+                        : 'border-[#DCE0E6] bg-[#F8FAFC] text-[#475569]'
+                    }`}
+                  >
+                    {full ? (
+                      <span>
+                        Limit reached (max {MAX_LEAVE_APPLICATIONS_PER_DATE} per date):{' '}
+                        {slot.overbooked
+                          .map((c) => `${c.date} (${c.count}/${MAX_LEAVE_APPLICATIONS_PER_DATE})`)
+                          .join(', ')}{' '}
+                        already full. Select another date.
+                      </span>
+                    ) : (
+                      <span>
+                        Daily Leave Limit ({slot.peakDate}): {slot.peakCount} /{' '}
+                        {MAX_LEAVE_APPLICATIONS_PER_DATE} slots used (
+                        {MAX_LEAVE_APPLICATIONS_PER_DATE - slot.peakCount} remaining).
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+
               <div>
                 <label className="block text-xs font-semibold text-[#111315] mb-1">
                   Reason / Details of Leave
@@ -1126,6 +1239,44 @@ export function LeaveApplicationWorkspace({
                   />
                 </div>
               </div>
+
+              {editingApp.principalStatus !== 'Disapproved' &&
+                editStartDate &&
+                editEndDate &&
+                editEndDate >= editStartDate &&
+                (() => {
+                  const slot = getRangeSlotSummary(
+                    leaveApplications,
+                    editStartDate,
+                    editEndDate,
+                    editingApp.id
+                  );
+                  const full = slot.overbooked.length > 0;
+                  return (
+                    <div
+                      className={`rounded-lg border px-3 py-2 text-[11px] font-medium ${
+                        full
+                          ? 'border-[#FECACA] bg-[#FEF2F2] text-[#B91C1C]'
+                          : 'border-[#DCE0E6] bg-[#F8FAFC] text-[#475569]'
+                      }`}
+                    >
+                      {full ? (
+                        <span>
+                          Limit reached (max {MAX_LEAVE_APPLICATIONS_PER_DATE} per date):{' '}
+                          {slot.overbooked
+                            .map((c) => `${c.date} (${c.count}/${MAX_LEAVE_APPLICATIONS_PER_DATE})`)
+                            .join(', ')}{' '}
+                          already full.
+                        </span>
+                      ) : (
+                        <span>
+                          Daily Leave Limit ({slot.peakDate}): {slot.peakCount} /{' '}
+                          {MAX_LEAVE_APPLICATIONS_PER_DATE} other slots used.
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
 
               <div>
                 <label className="block text-xs font-semibold text-[#111315] mb-1">

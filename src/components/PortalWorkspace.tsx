@@ -34,6 +34,7 @@ import {
 import {
   AcademicYear,
   AttendanceStatus,
+  CalendarActivityItem,
   DocumentReviewStatus,
   GradeEnrollmentRow,
   TEACHER_PORTAL_PROFILES,
@@ -41,6 +42,7 @@ import {
   TeacherSubmittedDocument,
 } from '../data/schoolData';
 import {
+  AccountNotification,
   ActivityPostCategory,
   ActivityPostItem,
   AdminAuditEntry,
@@ -56,6 +58,8 @@ import {
   LeaveType,
   MaterialRequisition,
   MaterialRequisitionCategory,
+  PrincipalDocument,
+  PrincipalDocumentCategory,
   PrincipalDocumentStatus,
   PrincipalRequisitionStatus,
   RequisitionUrgency,
@@ -71,6 +75,10 @@ import {
   UploadedCourseDocument,
 } from '../types/schoolConfig';
 import { Ao2StaffStudentsManager } from './Ao2StaffStudentsManager';
+import {
+  CalendarActivityManager,
+  type CalendarActivityMutationPayload,
+} from './CalendarActivityManager';
 import { LeaveApplicationWorkspace } from './LeaveApplicationViews';
 import {
   Ao2MaterialRequisitionView,
@@ -78,25 +86,39 @@ import {
   TeacherMaterialRequisitionView,
 } from './MaterialRequisitionViews';
 import { PortalPostPublisher } from './PortalPostPublisher';
+import {
+  AccountNotificationsBar,
+  PrincipalDocumentsManager,
+} from './PrincipalDocumentsViews';
 
 export type RoleWorkspace = 'teacher' | 'principal' | 'ao2';
 type TeacherTab =
   | 'submitted'
   | 'upload'
+  | 'principalDocs'
   | 'roster'
   | 'schedule'
   | 'requisitions'
   | 'leave'
   | 'posts'
   | 'security';
-type PrincipalTab = 'documents' | 'requisitions' | 'leave' | 'posts' | 'security';
+type PrincipalTab =
+  | 'documents'
+  | 'principalDocs'
+  | 'requisitions'
+  | 'leave'
+  | 'calendar'
+  | 'posts'
+  | 'security';
 type Ao2Tab =
   | 'dashboard'
   | 'records'
   | 'requisitions'
   | 'leave'
+  | 'calendar'
   | 'posts'
   | 'endorsed'
+  | 'principalDocs'
   | 'frontend'
   | 'backend'
   | 'accounts'
@@ -117,13 +139,6 @@ export interface StaffAuthSession {
   token: string;
 }
 
-const DEFAULT_FACULTY_PASSWORDS: Record<string, string> = {
-  't-sato': 'Sampaguita#1975',
-  't-chen': 'NarraLab#2026',
-  't-brooks': 'MolaveRead#2026',
-};
-const DEFAULT_GENERIC_FACULTY_PASSWORD = 'DanlogFaculty#2026';
-
 const DEFAULT_PRINCIPAL_PASSWORD = 'DanlogPrincipal#1975';
 const DEFAULT_AO2_PASSWORD = 'DanlogAO2#1975';
 
@@ -133,6 +148,8 @@ interface PortalWorkspaceProps {
   backendConfig: SiteBackendConfig;
   enrollmentByYear: Record<AcademicYear, GradeEnrollmentRow[]>;
   uploadedDocuments: UploadedCourseDocument[];
+  principalDocuments?: PrincipalDocument[];
+  accountNotifications?: AccountNotification[];
   admissionsSubmissions: AdmissionsSubmission[];
   inventoryItems: InventoryItem[];
   materialRequisitions: MaterialRequisition[];
@@ -141,6 +158,7 @@ interface PortalWorkspaceProps {
   studentRecords: StudentRecord[];
   activityPosts: ActivityPostItem[];
   homePosts: HomeFeedPost[];
+  calendarActivities?: CalendarActivityItem[];
   teacherNotes?: TeacherAdvisoryNote[];
   studentDocFeedback?: StudentDocFeedbackEntry[];
   auditLog: AdminAuditEntry[];
@@ -262,6 +280,24 @@ interface PortalWorkspaceProps {
     status: PrincipalDocumentStatus,
     note?: string
   ) => Promise<{ ok: boolean; error?: string }>;
+  onUploadPrincipalDocument?: (payload: {
+    title: string;
+    category: PrincipalDocumentCategory;
+    fileName: string;
+    fileSizeBytes: number;
+    notes: string;
+    documentContent?: string;
+    mimeType?: string;
+    file?: File | null;
+  }) => Promise<{ ok: boolean; error?: string; notifiedCount?: number }>;
+  onAo2DeletePrincipalDocument?: (docId: string) => Promise<{ ok: boolean; error?: string }>;
+  onMarkNotificationRead?: (
+    id: string,
+    roleHint?: 'teacher' | 'principal' | 'ao2'
+  ) => Promise<void>;
+  onMarkAllNotificationsRead?: (
+    roleHint?: 'teacher' | 'principal' | 'ao2'
+  ) => Promise<void>;
   onUpdateAdmissionStatus: (id: string, status: AdmissionsSubmission['status']) => Promise<void>;
   onAo2AddStaffRecord: (
     payload: Omit<StaffMemberRecord, 'id' | 'updatedAt'> & {
@@ -381,6 +417,19 @@ interface PortalWorkspaceProps {
     endorsementStatus?: 'Endorsed' | 'Pending Endorsement'
   ) => Promise<{ ok: boolean; error?: string }>;
   onAo2DeleteLeaveApplication: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  onCreateCalendarActivity?: (
+    role: 'ao2' | 'principal',
+    payload: CalendarActivityMutationPayload
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onUpdateCalendarActivity?: (
+    role: 'ao2' | 'principal',
+    id: string,
+    payload: CalendarActivityMutationPayload
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onDeleteCalendarActivity?: (
+    role: 'ao2' | 'principal',
+    id: string
+  ) => Promise<{ ok: boolean; error?: string }>;
 }
 
 const HERO_PRESETS = [
@@ -422,6 +471,8 @@ export function PortalWorkspace({
   backendConfig,
   enrollmentByYear,
   uploadedDocuments,
+  principalDocuments = [],
+  accountNotifications = [],
   admissionsSubmissions,
   inventoryItems,
   materialRequisitions,
@@ -430,6 +481,7 @@ export function PortalWorkspace({
   studentRecords,
   activityPosts,
   homePosts,
+  calendarActivities = [],
   teacherNotes = [],
   studentDocFeedback = [],
   auditLog,
@@ -464,6 +516,10 @@ export function PortalWorkspace({
   onUploadTeacherDocument,
   onDeleteUploadedDocument,
   onPrincipalReviewDocument,
+  onUploadPrincipalDocument,
+  onAo2DeletePrincipalDocument,
+  onMarkNotificationRead,
+  onMarkAllNotificationsRead,
   onUpdateAdmissionStatus,
   onAo2AddStaffRecord,
   onAo2UpdateStaffRecord,
@@ -493,8 +549,14 @@ export function PortalWorkspace({
   onAo2EditLeaveApplication,
   onAo2EndorseLeaveApplication,
   onAo2DeleteLeaveApplication,
+  onCreateCalendarActivity,
+  onUpdateCalendarActivity,
+  onDeleteCalendarActivity,
 }: PortalWorkspaceProps) {
   const [roleWorkspace, setRoleWorkspace] = useState<RoleWorkspace>(initialRole);
+  const [selectedPrincipalIssuedDocId, setSelectedPrincipalIssuedDocId] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     setRoleWorkspace(initialRole);
@@ -661,9 +723,12 @@ export function PortalWorkspace({
     | 'materialRequisitions'
     | 'leaveApplications'
     | 'uploadedDocuments'
+    | 'principalDocuments'
+    | 'accountNotifications'
     | 'admissionsSubmissions'
     | 'homePosts'
     | 'activityPosts'
+    | 'calendarActivities'
     | 'teacherNotes'
     | 'studentDocFeedback'
     | 'accounts'
@@ -1002,21 +1067,71 @@ export function PortalWorkspace({
   );
 
   const ao2SchoolTotals = useMemo(() => {
-    const activeRows = enrollmentByYear[backendConfig.activeAcademicYear] ?? [];
-    const totalStudents = activeRows.reduce((sum, r) => sum + r.enrolledStudents, 0);
+    const activeYear = backendConfig.activeAcademicYear;
+    const baseRows = enrollmentByYear[activeYear] ?? [];
+    const activeYearStudents = studentRecords.filter(
+      (st) =>
+        st.academicYear === activeYear &&
+        st.enrollmentStatus !== 'Transferred Out' &&
+        st.enrollmentStatus !== 'Graduated'
+    );
+
+    const staffIdSet = new Set(staffRecords.map((s) => s.id));
+    const teacherStaffRecords = staffRecords.filter((s) => s.role === 'Teacher');
+    const orphanTeacherAccounts = teacherAccounts.filter(
+      (acc) => !staffIdSet.has(acc.teacherId)
+    );
+
+    const activeRows = baseRows.map((row) => {
+      const gradeStudents = activeYearStudents.filter((st) => st.gradeId === row.id);
+      const gradeTeachers = teacherStaffRecords.filter((s) => s.assignedGradeId === row.id);
+      const uniqueSections = new Set(
+        gradeStudents
+          .map((st) => st.section.trim())
+          .filter((section) => section.length > 0)
+      ).size;
+
+      return {
+        ...row,
+        enrolledStudents: gradeStudents.length,
+        teachers: gradeTeachers.length,
+        sections: uniqueSections > 0 ? uniqueSections : row.sections,
+        facultyLead: gradeTeachers[0]?.fullName ?? row.facultyLead,
+      };
+    });
+
+    const baseRowIds = new Set(baseRows.map((r) => r.id));
+    const unassignedStudents = activeYearStudents.filter(
+      (st) => !baseRowIds.has(st.gradeId)
+    ).length;
+    const unassignedTeachers =
+      teacherStaffRecords.filter((s) => !baseRowIds.has(s.assignedGradeId)).length +
+      orphanTeacherAccounts.length;
+
+    const totalStudents = activeYearStudents.length;
     const totalCapacity = activeRows.reduce((sum, r) => sum + r.capacity, 0);
-    const totalTeachers = activeRows.reduce((sum, r) => sum + r.teachers, 0);
+    const totalTeachers = teacherStaffRecords.length + orphanTeacherAccounts.length;
     const totalSections = activeRows.reduce((sum, r) => sum + r.sections, 0);
     const ratio = totalTeachers > 0 ? (totalStudents / totalTeachers).toFixed(1) : '0.0';
+
     return {
       activeRows,
       totalStudents,
+      totalAllStudentRecords: studentRecords.length,
+      unassignedStudents,
       totalCapacity,
       totalTeachers,
+      unassignedTeachers,
       totalSections,
       ratio,
     };
-  }, [enrollmentByYear, backendConfig.activeAcademicYear]);
+  }, [
+    enrollmentByYear,
+    backendConfig.activeAcademicYear,
+    studentRecords,
+    staffRecords,
+    teacherAccounts,
+  ]);
 
   const ao2FilteredEndorsedDocs = useMemo(() => {
     const q = ao2DocSearch.trim().toLowerCase();
@@ -1553,9 +1668,9 @@ export function PortalWorkspace({
         {roleWorkspace === 'teacher' && (
           <div className="space-y-6">
             {!activeTeacher ? (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+              <div className="max-w-lg mx-auto">
                 {/* Username + Password Login Card */}
-                <div className="lg:col-span-6 bg-[#F8F9FA] rounded-2xl border border-[#E2E5E9] p-8 space-y-6">
+                <div className="bg-[#F8F9FA] rounded-2xl border border-[#E2E5E9] p-8 space-y-6">
                   <div className="space-y-1.5">
                     <div
                       className="inline-flex items-center gap-1.5 text-xs font-semibold"
@@ -1650,74 +1765,6 @@ export function PortalWorkspace({
                     </button>
                   </form>
                 </div>
-
-                {/* Assigned Faculty Credentials Directory (for testing distinct logins) */}
-                <div className="lg:col-span-6 bg-white rounded-2xl border border-[#E2E5E9] p-8 space-y-5">
-                  <div className="space-y-1">
-                    <div className="text-xs font-semibold text-[#525866]">
-                      Faculty Credential Directory
-                    </div>
-                    <h4 className="font-display text-xl font-semibold text-[#111315]">
-                      Distinct Username &amp; Password per Teacher
-                    </h4>
-                    <p className="text-xs text-[#525866]">
-                      Each faculty account uses unique credentials verified against the server. AO-II
-                      can update any teacher&apos;s username or reset passwords in the Admin Console.
-                    </p>
-                  </div>
-
-                  <div className="divide-y divide-[#E2E5E9] border-t border-b border-[#E2E5E9]">
-                    {mergedTeacherProfiles.map((t) => {
-                      const account = teacherAccounts.find((a) => a.teacherId === t.id);
-                      const username = account?.username ?? t.email.split('@')[0];
-                      const defaultPass =
-                        DEFAULT_FACULTY_PASSWORDS[t.id] ?? DEFAULT_GENERIC_FACULTY_PASSWORD;
-                      const canPrefillDefault = !account?.hasCustomPassword && Boolean(defaultPass);
-
-                      return (
-                        <div
-                          key={t.id}
-                          className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                        >
-                          <div className="space-y-1">
-                            <div className="text-sm font-semibold text-[#111315]">{t.name}</div>
-                            <div className="text-xs text-[#525866]">{t.assignedGradeLabel}</div>
-                            <div className="flex flex-wrap items-center gap-3 pt-0.5 text-xs font-mono">
-                              <span className="text-[#111315]">
-                                User: <strong>{username}</strong>
-                              </span>
-                              <span className="text-[#525866]">
-                                Pass:{' '}
-                                {canPrefillDefault ? (
-                                  <strong className="text-[#111315]">{defaultPass}</strong>
-                                ) : (
-                                  <span className="italic">Custom password set</span>
-                                )}
-                              </span>
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setTeacherUsernameInput(username);
-                              if (canPrefillDefault) {
-                                setTeacherPasswordInput(defaultPass);
-                              } else {
-                                setTeacherPasswordInput('');
-                              }
-                              setTeacherLoginError('');
-                            }}
-                            style={{ color: frontendConfig.accentColor }}
-                            className="px-3 py-1.5 text-xs font-semibold bg-[#F8F9FA] hover:bg-[#EAEDF1] border border-[#DCE0E6] rounded-lg cursor-pointer shrink-0 self-start sm:self-center"
-                          >
-                            {canPrefillDefault ? 'Fill Credentials' : 'Fill Username'}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
               </div>
             ) : (
               <div className="bg-white/95 backdrop-blur-xs rounded-2xl border border-[#CCE0D4] overflow-hidden shadow-xs">
@@ -1811,6 +1858,23 @@ export function PortalWorkspace({
                   </button>
                 </div>
 
+                {/* Teacher Account Notifications Bar */}
+                <AccountNotificationsBar
+                  accentColor={frontendConfig.accentColor}
+                  currentAccountId={activeTeacher.id}
+                  notifications={accountNotifications}
+                  onMarkRead={async (id) => {
+                    if (onMarkNotificationRead) await onMarkNotificationRead(id, 'teacher');
+                  }}
+                  onMarkAllRead={async () => {
+                    if (onMarkAllNotificationsRead) await onMarkAllNotificationsRead('teacher');
+                  }}
+                  onOpenDocument={(docId) => {
+                    setSelectedPrincipalIssuedDocId(docId);
+                    setTeacherTab('principalDocs');
+                  }}
+                />
+
                 {/* Teacher Tabs */}
                 <div className="px-6 pt-4 border-b border-[#E2E5E9] bg-white flex flex-wrap gap-2">
                   {[
@@ -1821,6 +1885,10 @@ export function PortalWorkspace({
                     {
                       id: 'upload' as TeacherTab,
                       label: `Upload My Documents (${currentTeacherUploadedDocs.length})`,
+                    },
+                    {
+                      id: 'principalDocs' as TeacherTab,
+                      label: `Principal Docs (${principalDocuments.length})`,
                     },
                     {
                       id: 'roster' as TeacherTab,
@@ -1998,33 +2066,39 @@ export function PortalWorkspace({
                                 {inspectedStudentDoc.summaryNote}
                               </p>
 
-                              {inspectedStudentDoc.teacherComment && (
-                                <div className="bg-[#F8F9FA] rounded-lg border border-[#E2E5E9] p-3 text-xs text-[#525866]">
-                                  <span className="font-semibold text-[#111315] block mb-0.5">
-                                    Feedback Recorded:
-                                  </span>
-                                  {inspectedStudentDoc.teacherComment}
+                              {inspectedStudentDoc.teacherComment ? (
+                                <div className="bg-[#F8F9FA] rounded-lg border border-[#E2E5E9] p-3 text-xs text-[#525866] space-y-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-semibold text-[#111315]">
+                                      Feedback Recorded:
+                                    </span>
+                                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#047857]">
+                                      <Lock className="w-3 h-3" />
+                                      <span>Saved (AO-II only to alter)</span>
+                                    </span>
+                                  </div>
+                                  <div>{inspectedStudentDoc.teacherComment}</div>
+                                </div>
+                              ) : (
+                                <div className="space-y-3 pt-2 border-t border-[#E2E5E9]">
+                                  <textarea
+                                    rows={2}
+                                    value={studentDocCommentDraft}
+                                    onChange={(e) => setStudentDocCommentDraft(e.target.value)}
+                                    placeholder="Optional feedback note..."
+                                    className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA] text-[#111315]"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={!studentDocCommentDraft.trim()}
+                                    onClick={() => handleSaveStudentDocFeedback(inspectedStudentDoc.id)}
+                                    style={{ backgroundColor: frontendConfig.accentColor }}
+                                    className="w-full py-2 px-3 text-xs font-semibold text-white hover:opacity-95 disabled:opacity-50 rounded-lg cursor-pointer"
+                                  >
+                                    Save Feedback Note
+                                  </button>
                                 </div>
                               )}
-
-                              <div className="space-y-3 pt-2 border-t border-[#E2E5E9]">
-                                <textarea
-                                  rows={2}
-                                  value={studentDocCommentDraft}
-                                  onChange={(e) => setStudentDocCommentDraft(e.target.value)}
-                                  placeholder="Optional feedback note..."
-                                  className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA] text-[#111315]"
-                                />
-                                <button
-                                  type="button"
-                                  disabled={!studentDocCommentDraft.trim()}
-                                  onClick={() => handleSaveStudentDocFeedback(inspectedStudentDoc.id)}
-                                  style={{ backgroundColor: frontendConfig.accentColor }}
-                                  className="w-full py-2 px-3 text-xs font-semibold text-white hover:opacity-95 disabled:opacity-50 rounded-lg cursor-pointer"
-                                >
-                                  Save Feedback Note
-                                </button>
-                              </div>
                             </div>
                           )}
                         </div>
@@ -2488,6 +2562,20 @@ export function PortalWorkspace({
                     />
                   )}
 
+                  {/* TEACHER TAB 2b: DOCUMENTS UPLOADED BY PRINCIPAL */}
+                  {teacherTab === 'principalDocs' && (
+                    <PrincipalDocumentsManager
+                      mode="teacher"
+                      accentColor={frontendConfig.accentColor}
+                      backendConfig={backendConfig}
+                      principalDocuments={principalDocuments}
+                      accountNotifications={accountNotifications}
+                      authQueryParam={`teacherToken=${encodeURIComponent(teacherSession?.token ?? '')}`}
+                      selectedDocId={selectedPrincipalIssuedDocId}
+                      onSelectDocId={setSelectedPrincipalIssuedDocId}
+                    />
+                  )}
+
                   {/* TEACHER TAB 6: WEBSITE POSTS & STUDENT ACTIVITIES */}
                   {teacherTab === 'posts' && (
                     <PortalPostPublisher
@@ -2880,6 +2968,23 @@ export function PortalWorkspace({
                   </button>
                 </div>
 
+                {/* Principal Account Notifications Bar */}
+                <AccountNotificationsBar
+                  accentColor={frontendConfig.accentColor}
+                  currentAccountId={principalStaffRecord?.id ?? 'staff-danlog-cadag'}
+                  notifications={accountNotifications}
+                  onMarkRead={async (id) => {
+                    if (onMarkNotificationRead) await onMarkNotificationRead(id, 'principal');
+                  }}
+                  onMarkAllRead={async () => {
+                    if (onMarkAllNotificationsRead) await onMarkAllNotificationsRead('principal');
+                  }}
+                  onOpenDocument={(docId) => {
+                    setSelectedPrincipalIssuedDocId(docId);
+                    setPrincipalTab('principalDocs');
+                  }}
+                />
+
                 {/* Principal Navigation Tabs */}
                 <div className="px-6 pt-4 border-b border-[#E2E5E9] bg-white flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap gap-2">
@@ -2887,6 +2992,10 @@ export function PortalWorkspace({
                       {
                         id: 'documents' as PrincipalTab,
                         label: `All Teacher Documents (${uploadedDocuments.length})`,
+                      },
+                      {
+                        id: 'principalDocs' as PrincipalTab,
+                        label: `Upload & Share Docs (${principalDocuments.length})`,
                       },
                       {
                         id: 'requisitions' as PrincipalTab,
@@ -2903,6 +3012,10 @@ export function PortalWorkspace({
                               l.principalStatus === 'Pending'
                           ).length
                         } Pending)`,
+                      },
+                      {
+                        id: 'calendar' as PrincipalTab,
+                        label: `Calendar of Activities (${calendarActivities.length})`,
                       },
                       { id: 'posts' as PrincipalTab, label: 'Website Posts' },
                       { id: 'security' as PrincipalTab, label: 'Account & Password' },
@@ -2943,7 +3056,21 @@ export function PortalWorkspace({
                   </div>
                 </div>
 
-                {principalTab === 'requisitions' ? (
+                {principalTab === 'principalDocs' ? (
+                  <div className="p-6">
+                    <PrincipalDocumentsManager
+                      mode="principal"
+                      accentColor={frontendConfig.accentColor}
+                      backendConfig={backendConfig}
+                      principalDocuments={principalDocuments}
+                      accountNotifications={accountNotifications}
+                      authQueryParam={`principalToken=${encodeURIComponent(principalSession.token)}`}
+                      selectedDocId={selectedPrincipalIssuedDocId}
+                      onSelectDocId={setSelectedPrincipalIssuedDocId}
+                      onUploadPrincipalDocument={onUploadPrincipalDocument}
+                    />
+                  </div>
+                ) : principalTab === 'requisitions' ? (
                   <div className="p-6">
                     <PrincipalMaterialRequisitionView
                       accentColor={frontendConfig.accentColor}
@@ -2967,6 +3094,38 @@ export function PortalWorkspace({
                         onSubmitLeaveApplication('Principal', payload)
                       }
                       onPrincipalDecideLeave={onPrincipalDecideLeave}
+                    />
+                  </div>
+                ) : principalTab === 'calendar' ? (
+                  <div className="p-6">
+                    <CalendarActivityManager
+                      accentColor={frontendConfig.accentColor}
+                      actorRoleLabel="Principal"
+                      activities={calendarActivities}
+                      onCreateActivity={(payload) =>
+                        onCreateCalendarActivity
+                          ? onCreateCalendarActivity('principal', payload)
+                          : Promise.resolve({
+                              ok: false,
+                              error: 'Calendar updates are not available.',
+                            })
+                      }
+                      onUpdateActivity={(id, payload) =>
+                        onUpdateCalendarActivity
+                          ? onUpdateCalendarActivity('principal', id, payload)
+                          : Promise.resolve({
+                              ok: false,
+                              error: 'Calendar updates are not available.',
+                            })
+                      }
+                      onDeleteActivity={(id) =>
+                        onDeleteCalendarActivity
+                          ? onDeleteCalendarActivity('principal', id)
+                          : Promise.resolve({
+                              ok: false,
+                              error: 'Calendar updates are not available.',
+                            })
+                      }
                     />
                   </div>
                 ) : principalTab === 'posts' ? (
@@ -3906,7 +4065,8 @@ export function PortalWorkspace({
                       {ao2SchoolTotals.totalStudents}
                     </div>
                     <div className="text-[11px] text-[#15803D] font-mono tabular-nums font-medium">
-                      {ao2SchoolTotals.totalCapacity} total seats · {ao2SchoolTotals.totalSections} sections
+                      {ao2SchoolTotals.totalAllStudentRecords} DB records ·{' '}
+                      {ao2SchoolTotals.totalCapacity} total seats
                     </div>
                   </button>
                   <button
@@ -3921,7 +4081,7 @@ export function PortalWorkspace({
                       {ao2SchoolTotals.totalTeachers}
                     </div>
                     <div className="text-[11px] text-[#1D4ED8] font-mono tabular-nums font-medium">
-                      {ao2SchoolTotals.ratio} : 1 pupil-teacher ratio
+                      {ao2SchoolTotals.ratio} : 1 ratio · {teacherAccounts.length} portal accounts
                     </div>
                   </button>
                   <button
@@ -3956,6 +4116,25 @@ export function PortalWorkspace({
                   </button>
                 </div>
 
+                {/* AO-II Account Notifications Bar */}
+                <AccountNotificationsBar
+                  accentColor={frontendConfig.accentColor}
+                  currentAccountId={
+                    ao2Session.accountId ?? primaryAo2Account?.accountId ?? 'staff-danlog-gabrito'
+                  }
+                  notifications={accountNotifications}
+                  onMarkRead={async (id) => {
+                    if (onMarkNotificationRead) await onMarkNotificationRead(id, 'ao2');
+                  }}
+                  onMarkAllRead={async () => {
+                    if (onMarkAllNotificationsRead) await onMarkAllNotificationsRead('ao2');
+                  }}
+                  onOpenDocument={(docId) => {
+                    setSelectedPrincipalIssuedDocId(docId);
+                    setAo2Tab('principalDocs');
+                  }}
+                />
+
                 {/* AO-II Navigation Tabs */}
                 <div className="px-6 pt-4 border-b border-[#E2E5E9] bg-white flex flex-wrap gap-2">
                   {[
@@ -3972,16 +4151,28 @@ export function PortalWorkspace({
                       id: 'leave' as Ao2Tab,
                       label: `Leave Applications (${leaveApplications.length})`,
                     },
+                    {
+                      id: 'calendar' as Ao2Tab,
+                      label: `Calendar (${calendarActivities.length})`,
+                    },
                     { id: 'posts' as Ao2Tab, label: 'Website Posts' },
                     {
                       id: 'endorsed' as Ao2Tab,
                       label: `Endorsed Docs (${ao2EndorsedDocs.length})`,
                     },
+                    {
+                      id: 'principalDocs' as Ao2Tab,
+                      label: `Principal Docs (${principalDocuments.length})`,
+                    },
                     { id: 'frontend' as Ao2Tab, label: 'Front-End Settings' },
-                    { id: 'backend' as Ao2Tab, label: 'Back-End & Capacity Controls' },
+                    { id: 'backend' as Ao2Tab, label: 'Back-End Policies' },
                     {
                       id: 'accounts' as Ao2Tab,
-                      label: `Staff & Portal Accounts (${teacherAccounts.length + 2})`,
+                      label: `Staff & Portal Accounts (${
+                        teacherAccounts.length +
+                        (principalAccount ? 1 : 0) +
+                        ao2AdminAccountsList.length
+                      })`,
                     },
                     {
                       id: 'admissions' as Ao2Tab,
@@ -4106,6 +4297,39 @@ export function PortalWorkspace({
                     />
                   )}
 
+                  {/* AO-II TAB: SCHOOL CALENDAR OF ACTIVITIES CRUD */}
+                  {ao2Tab === 'calendar' && (
+                    <CalendarActivityManager
+                      accentColor={frontendConfig.accentColor}
+                      actorRoleLabel="AO-II"
+                      activities={calendarActivities}
+                      onCreateActivity={(payload) =>
+                        onCreateCalendarActivity
+                          ? onCreateCalendarActivity('ao2', payload)
+                          : Promise.resolve({
+                              ok: false,
+                              error: 'Calendar updates are not available.',
+                            })
+                      }
+                      onUpdateActivity={(id, payload) =>
+                        onUpdateCalendarActivity
+                          ? onUpdateCalendarActivity('ao2', id, payload)
+                          : Promise.resolve({
+                              ok: false,
+                              error: 'Calendar updates are not available.',
+                            })
+                      }
+                      onDeleteActivity={(id) =>
+                        onDeleteCalendarActivity
+                          ? onDeleteCalendarActivity('ao2', id)
+                          : Promise.resolve({
+                              ok: false,
+                              error: 'Calendar updates are not available.',
+                            })
+                      }
+                    />
+                  )}
+
                   {/* AO-II TAB: WEBSITE POSTS & STUDENT ACTIVITIES */}
                   {ao2Tab === 'posts' && (
                     <PortalPostPublisher
@@ -4121,6 +4345,21 @@ export function PortalWorkspace({
                       onDeleteHomePost={onDeleteHomePost}
                       onCreateActivityPost={onCreateActivityPost}
                       onDeleteActivityPost={onDeleteActivityPost}
+                    />
+                  )}
+
+                  {/* AO-II TAB: DOCUMENTS UPLOADED BY PRINCIPAL */}
+                  {ao2Tab === 'principalDocs' && (
+                    <PrincipalDocumentsManager
+                      mode="ao2"
+                      accentColor={frontendConfig.accentColor}
+                      backendConfig={backendConfig}
+                      principalDocuments={principalDocuments}
+                      accountNotifications={accountNotifications}
+                      authQueryParam={`ao2Token=${encodeURIComponent(ao2Session.token)}`}
+                      selectedDocId={selectedPrincipalIssuedDocId}
+                      onSelectDocId={setSelectedPrincipalIssuedDocId}
+                      onDeletePrincipalDocument={onAo2DeletePrincipalDocument}
                     />
                   )}
 
@@ -4222,7 +4461,7 @@ export function PortalWorkspace({
                               <p className="text-xs text-[#525866]">
                                 Active School Year {backendConfig.activeAcademicYear} ·{' '}
                                 {ao2SchoolTotals.totalStudents} Students ·{' '}
-                                {ao2SchoolTotals.totalTeachers} Teachers
+                                {ao2SchoolTotals.totalTeachers} Teachers (Live from database records)
                               </p>
                             </div>
                             <div className="flex flex-wrap items-center gap-1.5">
@@ -4326,23 +4565,70 @@ export function PortalWorkspace({
                                       <td className="py-2.5 px-4 text-[#525866]">{row.facultyLead}</td>
                                     </tr>
                                   ))}
+                                {ao2DashDivision === 'All' &&
+                                  (ao2SchoolTotals.unassignedStudents > 0 ||
+                                    ao2SchoolTotals.unassignedTeachers > 0) && (
+                                    <tr className="bg-[#F8FAFC] text-[#525866]">
+                                      <td className="py-2.5 px-4 font-medium text-[#111315]">
+                                        School-Wide / Other Grade
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right font-mono tabular-nums">
+                                        {ao2SchoolTotals.unassignedStudents}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right font-mono tabular-nums">
+                                        —
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right font-mono tabular-nums">
+                                        {ao2SchoolTotals.unassignedTeachers}
+                                      </td>
+                                      <td className="py-2.5 px-4">School-Wide Assignment</td>
+                                    </tr>
+                                  )}
                               </tbody>
                               <tfoot>
-                                <tr className="border-t border-[#DCE0E6] bg-[#F8F9FA] font-semibold text-[#111315]">
-                                  <td className="py-2.5 px-4">School Total</td>
-                                  <td className="py-2.5 px-3 text-right font-mono tabular-nums">
-                                    {ao2SchoolTotals.totalStudents}
-                                  </td>
-                                  <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#525866]">
-                                    {ao2SchoolTotals.totalCapacity}
-                                  </td>
-                                  <td className="py-2.5 px-3 text-right font-mono tabular-nums">
-                                    {ao2SchoolTotals.totalTeachers}
-                                  </td>
-                                  <td className="py-2.5 px-4 text-[11px] text-[#525866]">
-                                    {ao2SchoolTotals.totalSections} total sections
-                                  </td>
-                                </tr>
+                                {(() => {
+                                  const visibleRows = ao2SchoolTotals.activeRows.filter(
+                                    (row) =>
+                                      ao2DashDivision === 'All' || row.division === ao2DashDivision
+                                  );
+                                  const footerStudents =
+                                    ao2DashDivision === 'All'
+                                      ? ao2SchoolTotals.totalStudents
+                                      : visibleRows.reduce((s, r) => s + r.enrolledStudents, 0);
+                                  const footerCapacity = visibleRows.reduce(
+                                    (s, r) => s + r.capacity,
+                                    0
+                                  );
+                                  const footerTeachers =
+                                    ao2DashDivision === 'All'
+                                      ? ao2SchoolTotals.totalTeachers
+                                      : visibleRows.reduce((s, r) => s + r.teachers, 0);
+                                  const footerSections = visibleRows.reduce(
+                                    (s, r) => s + r.sections,
+                                    0
+                                  );
+                                  return (
+                                    <tr className="border-t border-[#DCE0E6] bg-[#F8F9FA] font-semibold text-[#111315]">
+                                      <td className="py-2.5 px-4">
+                                        {ao2DashDivision === 'All'
+                                          ? 'School Total'
+                                          : `${ao2DashDivision} Total`}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right font-mono tabular-nums">
+                                        {footerStudents}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#525866]">
+                                        {footerCapacity}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right font-mono tabular-nums">
+                                        {footerTeachers}
+                                      </td>
+                                      <td className="py-2.5 px-4 text-[11px] text-[#525866]">
+                                        {footerSections} total sections
+                                      </td>
+                                    </tr>
+                                  );
+                                })()}
                               </tfoot>
                             </table>
                           </div>
@@ -4605,7 +4891,6 @@ export function PortalWorkspace({
                               className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
                             >
                               <option value="2026-2027">2026–2027</option>
-                              <option value="2025-2026">2025–2026</option>
                             </select>
                           </div>
 
@@ -4718,50 +5003,6 @@ export function PortalWorkspace({
                           </button>
                         </div>
                       </form>
-
-                      {/* AO-II Grade Seat Capacity Overrides */}
-                      <div className="bg-white rounded-xl border border-[#E2E5E9] p-6 space-y-4">
-                        <div>
-                          <h4 className="font-display text-lg font-semibold text-[#111315]">
-                            Grade Seat Capacity Controls ({backendConfig.activeAcademicYear})
-                          </h4>
-                          <p className="text-xs text-[#525866]">
-                            Adjust maximum seat capacities per grade level; changes sync immediately
-                            to the public Enrollment Dashboard.
-                          </p>
-                        </div>
-
-                        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-                          {(enrollmentByYear[backendConfig.activeAcademicYear] ?? []).map((row) => (
-                            <div
-                              key={row.id}
-                              className="p-3 rounded-lg border border-[#E2E5E9] bg-[#F8F9FA] space-y-1.5"
-                            >
-                              <div className="text-xs font-semibold text-[#111315]">
-                                {row.gradeLabel}
-                              </div>
-                              <div className="text-[11px] font-mono tabular-nums text-[#525866]">
-                                Enrolled: {row.enrolledStudents}
-                              </div>
-                              <input
-                                type="number"
-                                min={10}
-                                max={150}
-                                value={row.capacity}
-                                aria-label={`Seat capacity for ${row.gradeLabel}`}
-                                onChange={(e) =>
-                                  void onUpdateCapacity(
-                                    backendConfig.activeAcademicYear,
-                                    row.id,
-                                    Number(e.target.value)
-                                  )
-                                }
-                                className="w-full px-2 py-1 text-xs font-mono tabular-nums rounded border border-[#DCE0E6] bg-white"
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
                     </div>
                   )}
 
@@ -6591,8 +6832,7 @@ export function PortalWorkspace({
                             label: 'Enrollment Rows',
                             count:
                               dbOverview?.counts.enrollmentRows ??
-                              (enrollmentByYear['2026-2027']?.length ?? 0) +
-                                (enrollmentByYear['2025-2026']?.length ?? 0),
+                              (enrollmentByYear['2026-2027']?.length ?? 0),
                           },
                           {
                             id: 'staffRecords' as const,
@@ -6629,6 +6869,19 @@ export function PortalWorkspace({
                             count: dbOverview?.counts.uploadedDocuments ?? uploadedDocuments.length,
                           },
                           {
+                            id: 'principalDocuments' as const,
+                            label: 'Principal Docs',
+                            count:
+                              dbOverview?.counts.principalDocuments ?? principalDocuments.length,
+                          },
+                          {
+                            id: 'accountNotifications' as const,
+                            label: 'Notifications',
+                            count:
+                              dbOverview?.counts.accountNotifications ??
+                              accountNotifications.length,
+                          },
+                          {
                             id: 'admissionsSubmissions' as const,
                             label: 'Inquiries',
                             count:
@@ -6643,6 +6896,12 @@ export function PortalWorkspace({
                             id: 'activityPosts' as const,
                             label: 'Activity Posts',
                             count: dbOverview?.counts.activityPosts ?? activityPosts.length,
+                          },
+                          {
+                            id: 'calendarActivities' as const,
+                            label: 'Calendar',
+                            count:
+                              dbOverview?.counts.calendarActivities ?? calendarActivities.length,
                           },
                           {
                             id: 'teacherNotes' as const,
@@ -6717,7 +6976,7 @@ export function PortalWorkspace({
                           </div>
                           {dbCollection === 'enrollment' && (
                             <div className="inline-flex rounded-lg border border-[#DCE0E6] bg-[#F8F9FA] p-0.5">
-                              {(['2026-2027', '2025-2026'] as AcademicYear[]).map((yr) => (
+                              {(['2026-2027'] as AcademicYear[]).map((yr) => (
                                 <button
                                   key={yr}
                                   type="button"
@@ -7413,6 +7672,266 @@ export function PortalWorkspace({
                                       </tr>
                                     );
                                   })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 3b: Principal Uploaded Documents */}
+                      {dbCollection === 'principalDocuments' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Record ID</th>
+                                  <th className="py-3 px-4 font-semibold">Title &amp; Audience</th>
+                                  <th className="py-3 px-4 font-semibold">Uploaded By</th>
+                                  <th className="py-3 px-4 font-semibold">File</th>
+                                  <th className="py-3 px-4 font-semibold">Notified Accounts</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.principalDocuments ?? principalDocuments)
+                                  .filter((doc) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      doc.id.toLowerCase().includes(q) ||
+                                      doc.title.toLowerCase().includes(q) ||
+                                      doc.category.toLowerCase().includes(q) ||
+                                      doc.fileName.toLowerCase().includes(q) ||
+                                      doc.uploadedByName.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((doc) => {
+                                    const delKey = `principalDocuments::${doc.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    return (
+                                      <tr key={doc.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {doc.id}
+                                        </td>
+                                        <td className="py-3 px-4">
+                                          <div className="font-semibold text-[#111315]">
+                                            {doc.title}
+                                          </div>
+                                          <div className="text-[11px] text-[#525866]">
+                                            {doc.category} · {doc.targetAudience}
+                                          </div>
+                                        </td>
+                                        <td className="py-3 px-4 text-[#525866]">
+                                          <div>{doc.uploadedByName}</div>
+                                          <div className="text-[11px] text-[#64748B]">
+                                            @{doc.uploadedByUsername}
+                                          </div>
+                                        </td>
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {doc.fileName} ({doc.fileSizeLabel})
+                                        </td>
+                                        <td className="py-3 px-4 text-[#525866] tabular-nums">
+                                          {doc.notifiedAccountCount} accounts
+                                        </td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                disabled={dbBusyKey === delKey}
+                                                onClick={async () => {
+                                                  setDbBusyKey(delKey);
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'principalDocuments',
+                                                    doc.id
+                                                  );
+                                                  setDbBusyKey(null);
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (!res.ok) {
+                                                    setAo2ErrorMessage(
+                                                      res.error ||
+                                                        'Could not delete principal document.'
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                  setAo2SaveMessage(
+                                                    `Deleted principal document ${doc.id} from database.`
+                                                  );
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white hover:bg-[#991B1B] cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] font-semibold border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                {(dbOverview?.data.principalDocuments ?? principalDocuments)
+                                  .length === 0 && (
+                                  <tr>
+                                    <td
+                                      colSpan={6}
+                                      className="py-8 px-4 text-center text-xs text-[#64748B]"
+                                    >
+                                      No Principal documents saved in the database yet.
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 3c: Account Notifications */}
+                      {dbCollection === 'accountNotifications' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Record ID</th>
+                                  <th className="py-3 px-4 font-semibold">Notification</th>
+                                  <th className="py-3 px-4 font-semibold">Sender</th>
+                                  <th className="py-3 px-4 font-semibold">Delivery &amp; Read</th>
+                                  <th className="py-3 px-4 font-semibold">Created</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.accountNotifications ?? accountNotifications)
+                                  .filter((item) => {
+                                    const q = dbSearch.trim().toLowerCase();
+                                    return (
+                                      !q ||
+                                      item.id.toLowerCase().includes(q) ||
+                                      item.title.toLowerCase().includes(q) ||
+                                      item.message.toLowerCase().includes(q) ||
+                                      item.documentTitle.toLowerCase().includes(q) ||
+                                      item.senderName.toLowerCase().includes(q)
+                                    );
+                                  })
+                                  .map((item) => {
+                                    const delKey = `accountNotifications::${item.id}`;
+                                    const confirming = dbConfirmDeleteKey === delKey;
+                                    return (
+                                      <tr key={item.id} className="hover:bg-[#F8FAFC]">
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {item.id}
+                                        </td>
+                                        <td className="py-3 px-4 max-w-sm">
+                                          <div className="font-semibold text-[#111315]">
+                                            {item.title}
+                                          </div>
+                                          <div className="text-[11px] text-[#525866] line-clamp-2">
+                                            {item.message}
+                                          </div>
+                                        </td>
+                                        <td className="py-3 px-4 text-[#525866]">
+                                          <div>{item.senderName}</div>
+                                          <div className="text-[11px] text-[#64748B]">
+                                            {item.senderRole} (@{item.senderUsername})
+                                          </div>
+                                        </td>
+                                        <td className="py-3 px-4 text-[#525866] tabular-nums">
+                                          {item.readByAccountIds.length} / {item.recipientCount} read
+                                        </td>
+                                        <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                          {item.createdAt}
+                                        </td>
+                                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                                          {confirming ? (
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                disabled={dbBusyKey === delKey}
+                                                onClick={async () => {
+                                                  setDbBusyKey(delKey);
+                                                  const res = await onAo2DeleteDbRecord(
+                                                    'accountNotifications',
+                                                    item.id
+                                                  );
+                                                  setDbBusyKey(null);
+                                                  setDbConfirmDeleteKey(null);
+                                                  if (!res.ok) {
+                                                    setAo2ErrorMessage(
+                                                      res.error ||
+                                                        'Could not delete notification record.'
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (res.overview) {
+                                                    setDbOverview(res.overview);
+                                                    setDbJsonDraft(
+                                                      JSON.stringify(res.overview.data, null, 2)
+                                                    );
+                                                  }
+                                                  setAo2SaveMessage(
+                                                    `Deleted notification ${item.id} from database.`
+                                                  );
+                                                }}
+                                                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white hover:bg-[#991B1B] cursor-pointer"
+                                              >
+                                                Confirm Delete
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDbConfirmDeleteKey(null)}
+                                                className="px-2 py-1 rounded-md text-[11px] font-semibold border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(delKey)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                              <span>Delete</span>
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                {(dbOverview?.data.accountNotifications ?? accountNotifications)
+                                  .length === 0 && (
+                                  <tr>
+                                    <td
+                                      colSpan={6}
+                                      className="py-8 px-4 text-center text-xs text-[#64748B]"
+                                    >
+                                      No account notifications saved in the database yet.
+                                    </td>
+                                  </tr>
+                                )}
                               </tbody>
                             </table>
                           </div>
@@ -8266,6 +8785,95 @@ export function PortalWorkspace({
                                                 const res = await onAo2DeleteDbRecord(
                                                   'activityPosts',
                                                   ap.id
+                                                );
+                                                setDbConfirmDeleteKey(null);
+                                                if (res.overview) {
+                                                  setDbOverview(res.overview);
+                                                  setDbJsonDraft(
+                                                    JSON.stringify(res.overview.data, null, 2)
+                                                  );
+                                                }
+                                              }}
+                                              className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#B91C1C] text-white cursor-pointer"
+                                            >
+                                              Confirm Delete
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => setDbConfirmDeleteKey(null)}
+                                              className="px-2 py-1 rounded-md text-[11px] border border-[#DCE0E6] text-[#525866] cursor-pointer"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            onClick={() => setDbConfirmDeleteKey(delKey)}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2] cursor-pointer"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                            <span>Delete</span>
+                                          </button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Collection 6e2: School Calendar Activities */}
+                      {dbCollection === 'calendarActivities' && (
+                        <div className="bg-white rounded-xl border border-[#E2E5E9] overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead className="bg-[#F8FAFC] border-b border-[#E2E5E9] text-[#525866]">
+                                <tr>
+                                  <th className="py-3 px-4 font-semibold">Event ID</th>
+                                  <th className="py-3 px-4 font-semibold">Date &amp; Time</th>
+                                  <th className="py-3 px-4 font-semibold">Activity Title &amp; Category</th>
+                                  <th className="py-3 px-4 font-semibold">Division &amp; Venue</th>
+                                  <th className="py-3 px-4 font-semibold text-right">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E2E5E9]">
+                                {(dbOverview?.data.calendarActivities ?? calendarActivities).map((ev) => {
+                                  const delKey = `calendarActivities::${ev.id}`;
+                                  const confirming = dbConfirmDeleteKey === delKey;
+                                  return (
+                                    <tr key={ev.id} className="hover:bg-[#F8FAFC]">
+                                      <td className="py-3 px-4 font-mono text-[11px] text-[#525866]">
+                                        {ev.id}
+                                      </td>
+                                      <td className="py-3 px-4">
+                                        <div className="font-semibold text-[#111315]">
+                                          {ev.monthShort} {ev.dayNumber} ({ev.dayOfWeek})
+                                        </div>
+                                        <div className="text-[11px] text-[#525866]">
+                                          {ev.monthGroup} · {ev.timeRange}
+                                        </div>
+                                      </td>
+                                      <td className="py-3 px-4">
+                                        <div className="font-semibold text-[#111315]">{ev.title}</div>
+                                        <div className="text-[11px] text-[#525866]">{ev.category}</div>
+                                      </td>
+                                      <td className="py-3 px-4 text-[#525866]">
+                                        <div>{ev.divisionScope}</div>
+                                        <div className="text-[11px]">{ev.venue}</div>
+                                      </td>
+                                      <td className="py-3 px-4 text-right whitespace-nowrap">
+                                        {confirming ? (
+                                          <div className="inline-flex items-center gap-1.5">
+                                            <button
+                                              type="button"
+                                              onClick={async () => {
+                                                const res = await onAo2DeleteDbRecord(
+                                                  'calendarActivities',
+                                                  ev.id
                                                 );
                                                 setDbConfirmDeleteKey(null);
                                                 if (res.overview) {

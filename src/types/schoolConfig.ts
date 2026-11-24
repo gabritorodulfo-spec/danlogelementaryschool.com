@@ -1,6 +1,7 @@
 import type {
   AcademicYear,
   AttendanceStatus,
+  CalendarActivityItem,
   GradeEnrollmentRow,
 } from '../data/schoolData';
 
@@ -60,6 +61,52 @@ export interface UploadedCourseDocument {
   ao2EndorsementStatus?: 'Endorsed/Principal';
   endorsedAt?: string;
   endorsedBy?: string;
+}
+
+export type PrincipalDocumentCategory =
+  | 'School Memorandum'
+  | 'Division Circular'
+  | 'Faculty Directive'
+  | 'Policy & Guidelines'
+  | 'Event Notice'
+  | 'Official Form'
+  | 'General';
+
+export interface PrincipalDocument {
+  id: string;
+  uploadedByAccountId: string;
+  uploadedByName: string;
+  uploadedByUsername: string;
+  title: string;
+  category: PrincipalDocumentCategory;
+  targetAudience: string;
+  fileName: string;
+  fileSizeBytes: number;
+  fileSizeLabel: string;
+  uploadedAt: string;
+  notes: string;
+  documentContent?: string;
+  mimeType?: string;
+  hasStoredFile?: boolean;
+  notifiedAccountCount: number;
+}
+
+export interface AccountNotification {
+  id: string;
+  type: 'principal_document';
+  title: string;
+  message: string;
+  documentId: string;
+  documentTitle: string;
+  documentCategory: PrincipalDocumentCategory;
+  fileName: string;
+  senderRole: 'Principal';
+  senderName: string;
+  senderUsername: string;
+  recipientAccountIds: string[];
+  recipientCount: number;
+  readByAccountIds: string[];
+  createdAt: string;
 }
 
 export interface AdmissionsSubmission {
@@ -321,6 +368,8 @@ export interface SchoolSystemBootstrap {
   backendConfig: SiteBackendConfig;
   enrollmentByYear: Record<AcademicYear, GradeEnrollmentRow[]>;
   uploadedDocuments: UploadedCourseDocument[];
+  principalDocuments?: PrincipalDocument[];
+  accountNotifications?: AccountNotification[];
   admissionsSubmissions: AdmissionsSubmission[];
   inventoryItems: InventoryItem[];
   materialRequisitions: MaterialRequisition[];
@@ -331,6 +380,7 @@ export interface SchoolSystemBootstrap {
   homePosts: HomeFeedPost[];
   teacherNotes?: TeacherAdvisoryNote[];
   studentDocFeedback?: StudentDocFeedbackEntry[];
+  calendarActivities?: CalendarActivityItem[];
   auditLog: AdminAuditEntry[];
   teacherAccounts: TeacherAccountSummary[];
   principalAccount: StaffAccountSummary | null;
@@ -343,6 +393,8 @@ export type DatabaseRecordCollection =
   | 'materialRequisitions'
   | 'leaveApplications'
   | 'uploadedDocuments'
+  | 'principalDocuments'
+  | 'accountNotifications'
   | 'admissionsSubmissions'
   | 'staffRecords'
   | 'teacherAccounts'
@@ -351,6 +403,7 @@ export type DatabaseRecordCollection =
   | 'studentRecords'
   | 'activityPosts'
   | 'homePosts'
+  | 'calendarActivities'
   | 'teacherNotes'
   | 'studentDocFeedback'
   | 'auditLog';
@@ -366,11 +419,14 @@ export interface DatabaseOverview {
     materialRequisitions: number;
     leaveApplications?: number;
     uploadedDocuments: number;
+    principalDocuments?: number;
+    accountNotifications?: number;
     admissionsSubmissions: number;
     staffRecords: number;
     studentRecords: number;
     activityPosts: number;
     homePosts: number;
+    calendarActivities?: number;
     teacherNotes?: number;
     studentDocFeedback?: number;
     staffAccounts: number;

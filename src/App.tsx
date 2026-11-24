@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, ArrowUpRight, Bell, Calendar, Clock, MapPin } from 'lucide-react';
 import { ActivitiesGallery } from './components/ActivitiesGallery';
 import { AdmissionsForm } from './components/AdmissionsForm';
+import type { CalendarActivityMutationPayload } from './components/CalendarActivityManager';
 import { DispatchModal } from './components/DispatchModal';
 import { EnrollmentDashboard } from './components/EnrollmentDashboard';
 import { FacilityLightbox } from './components/FacilityLightbox';
@@ -21,6 +22,7 @@ import {
   AcademicYear,
   AttendanceStatus,
   CAMPUS_FACILITIES,
+  CalendarActivityItem,
   CampusFacility,
   FacilityCategory,
   HERO_CAMPUS,
@@ -32,6 +34,7 @@ import {
   TEACHER_PORTAL_PROFILES,
 } from './data/schoolData';
 import {
+  AccountNotification,
   ActivityPostCategory,
   ActivityPostItem,
   AdminAuditEntry,
@@ -47,6 +50,8 @@ import {
   LeaveType,
   MaterialRequisition,
   MaterialRequisitionCategory,
+  PrincipalDocument,
+  PrincipalDocumentCategory,
   PrincipalDocumentStatus,
   PrincipalRequisitionStatus,
   RequisitionUrgency,
@@ -140,6 +145,8 @@ export default function App() {
     structuredClone(INITIAL_ENROLLMENT_BY_YEAR)
   );
   const [uploadedDocuments, setUploadedDocuments] = useState<UploadedCourseDocument[]>([]);
+  const [principalDocuments, setPrincipalDocuments] = useState<PrincipalDocument[]>([]);
+  const [accountNotifications, setAccountNotifications] = useState<AccountNotification[]>([]);
   const [admissionsSubmissions, setAdmissionsSubmissions] = useState<AdmissionsSubmission[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [materialRequisitions, setMaterialRequisitions] = useState<MaterialRequisition[]>([]);
@@ -150,6 +157,9 @@ export default function App() {
   const [homePosts, setHomePosts] = useState<HomeFeedPost[]>([]);
   const [teacherNotes, setTeacherNotes] = useState<TeacherAdvisoryNote[]>([]);
   const [studentDocFeedback, setStudentDocFeedback] = useState<StudentDocFeedbackEntry[]>([]);
+  const [calendarActivities, setCalendarActivities] = useState<CalendarActivityItem[]>(() =>
+    structuredClone(SCHOOL_CALENDAR_EVENTS)
+  );
   const [auditLog, setAuditLog] = useState<AdminAuditEntry[]>([]);
   const [teacherAccounts, setTeacherAccounts] = useState<TeacherAccountSummary[]>([]);
   const [principalAccount, setPrincipalAccount] = useState<StaffAccountSummary | null>(null);
@@ -181,6 +191,8 @@ export default function App() {
     setBackendConfig(data.backendConfig);
     setEnrollmentByYear(data.enrollmentByYear);
     setUploadedDocuments(data.uploadedDocuments);
+    setPrincipalDocuments(data.principalDocuments ?? []);
+    setAccountNotifications(data.accountNotifications ?? []);
     setAdmissionsSubmissions(data.admissionsSubmissions);
     setInventoryItems(data.inventoryItems ?? []);
     setMaterialRequisitions(data.materialRequisitions ?? []);
@@ -191,6 +203,11 @@ export default function App() {
     setHomePosts(data.homePosts ?? []);
     setTeacherNotes(data.teacherNotes ?? []);
     setStudentDocFeedback(data.studentDocFeedback ?? []);
+    setCalendarActivities(
+      Array.isArray(data.calendarActivities)
+        ? data.calendarActivities
+        : structuredClone(SCHOOL_CALENDAR_EVENTS)
+    );
     setAuditLog(data.auditLog);
     setTeacherAccounts(data.teacherAccounts ?? []);
     setPrincipalAccount(data.principalAccount ?? null);
@@ -227,9 +244,13 @@ export default function App() {
     const handleOnline = () => {
       void syncFromServer();
     };
+    const handleFocus = () => {
+      void syncFromServer();
+    };
     window.addEventListener('online', handleOnline);
+    window.addEventListener('focus', handleFocus);
     const interval = window.setInterval(() => {
-      if (loadPendingDbWrites().length > 0) {
+      if (loadPendingDbWrites().length > 0 || document.visibilityState === 'visible') {
         void syncFromServer();
       }
     }, 15000);
@@ -237,17 +258,20 @@ export default function App() {
     return () => {
       active = false;
       window.removeEventListener('online', handleOnline);
+      window.removeEventListener('focus', handleFocus);
       window.clearInterval(interval);
     };
   }, []);
 
   useEffect(() => {
-    if (!hasHydratedStore || !ao2Account) return;
+    if (!hasHydratedStore) return;
     saveBootstrapCache({
       frontendConfig,
       backendConfig,
       enrollmentByYear,
       uploadedDocuments,
+      principalDocuments,
+      accountNotifications,
       admissionsSubmissions,
       inventoryItems,
       materialRequisitions,
@@ -258,10 +282,15 @@ export default function App() {
       homePosts,
       teacherNotes,
       studentDocFeedback,
+      calendarActivities,
       auditLog,
       teacherAccounts,
       principalAccount,
-      ao2Account,
+      ao2Account: ao2Account ?? {
+        username: ao2Accounts[0]?.username ?? 'r.gabrito',
+        hasCustomPassword: ao2Accounts[0]?.hasCustomPassword ?? true,
+        updatedAt: ao2Accounts[0]?.updatedAt ?? '',
+      },
       ao2Accounts,
     });
   }, [
@@ -270,6 +299,8 @@ export default function App() {
     backendConfig,
     enrollmentByYear,
     uploadedDocuments,
+    principalDocuments,
+    accountNotifications,
     admissionsSubmissions,
     inventoryItems,
     materialRequisitions,
@@ -280,6 +311,7 @@ export default function App() {
     homePosts,
     teacherNotes,
     studentDocFeedback,
+    calendarActivities,
     auditLog,
     teacherAccounts,
     principalAccount,
@@ -342,15 +374,19 @@ export default function App() {
   const upcomingCalendarNotices = useMemo(() => {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-    const parseEventDate = (dayNumber: string, monthGroup: string) => {
-      const parsed = new Date(`${monthGroup.replace(' ', ` ${Number(dayNumber)}, `)}`);
+    const parseEventDate = (ev: CalendarActivityItem) => {
+      if (ev.eventDate && /^\d{4}-\d{2}-\d{2}$/.test(ev.eventDate)) {
+        const parsedIso = new Date(`${ev.eventDate}T00:00:00`);
+        if (!Number.isNaN(parsedIso.getTime())) return parsedIso;
+      }
+      const parsed = new Date(`${ev.monthGroup.replace(' ', ` ${Number(ev.dayNumber)}, `)}`);
       return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
     };
-    const upcoming = SCHOOL_CALENDAR_EVENTS.filter(
-      (ev) => parseEventDate(ev.dayNumber, ev.monthGroup).getTime() >= todayStart.getTime()
+    const upcoming = calendarActivities.filter(
+      (ev) => parseEventDate(ev).getTime() >= todayStart.getTime()
     );
-    return (upcoming.length > 0 ? upcoming : SCHOOL_CALENDAR_EVENTS).slice(0, 3);
-  }, []);
+    return (upcoming.length > 0 ? upcoming : calendarActivities).slice(0, 3);
+  }, [calendarActivities]);
 
   const scrollToAdmissions = (facilityTitle?: string) => {
     if (facilityTitle) setTourFacilityRef(facilityTitle);
@@ -996,6 +1032,143 @@ export default function App() {
     return { ok: true };
   };
 
+  const handleUploadPrincipalDocument = async (payload: {
+    title: string;
+    category: PrincipalDocumentCategory;
+    fileName: string;
+    fileSizeBytes: number;
+    notes: string;
+    documentContent?: string;
+    mimeType?: string;
+    file?: File | null;
+  }): Promise<{ ok: boolean; error?: string; notifiedCount?: number }> => {
+    const { file, ...metadata } = payload;
+    const res = await fetch('/api/principal/documents/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-principal-role': 'PRINCIPAL',
+        'x-principal-token': principalSession?.token ?? '',
+      },
+      body: JSON.stringify(metadata),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Principal document upload failed.' };
+    }
+    if (data.principalDocuments) setPrincipalDocuments(data.principalDocuments);
+    if (data.accountNotifications) setAccountNotifications(data.accountNotifications);
+    if (data.auditLog) setAuditLog(data.auditLog);
+
+    if (file && data.document?.id) {
+      const fileRes = await fetch(
+        `/api/principal/documents/${encodeURIComponent(data.document.id)}/file`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+            'x-principal-role': 'PRINCIPAL',
+            'x-principal-token': principalSession?.token ?? '',
+          },
+          body: file,
+        }
+      );
+      if (fileRes.ok) {
+        const fileData = await fileRes.json().catch(() => ({}));
+        if (fileData.principalDocuments) setPrincipalDocuments(fileData.principalDocuments);
+      }
+    }
+
+    return {
+      ok: true,
+      notifiedCount: data.notification?.recipientCount ?? data.document?.notifiedAccountCount,
+    };
+  };
+
+  const handleAo2DeletePrincipalDocument = async (
+    docId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch(`/api/principal/documents/${encodeURIComponent(docId)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session?.token ?? '',
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not remove Principal document.' };
+    }
+    if (data.principalDocuments) setPrincipalDocuments(data.principalDocuments);
+    if (data.accountNotifications) setAccountNotifications(data.accountNotifications);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const buildActiveNotificationAuthHeaders = (): Record<string, string> => {
+    if (ao2Session?.token) {
+      return { 'x-admin-role': 'AO-II', 'x-ao2-token': ao2Session.token };
+    }
+    if (principalSession?.token) {
+      return { 'x-principal-role': 'PRINCIPAL', 'x-principal-token': principalSession.token };
+    }
+    if (teacherSession?.token) {
+      return { 'x-teacher-token': teacherSession.token };
+    }
+    return {};
+  };
+
+  const handleMarkNotificationRead = async (
+    id: string,
+    roleHint?: 'teacher' | 'principal' | 'ao2'
+  ): Promise<void> => {
+    const headers: Record<string, string> =
+      roleHint === 'ao2' && ao2Session?.token
+        ? { 'x-admin-role': 'AO-II', 'x-ao2-token': ao2Session.token }
+        : roleHint === 'principal' && principalSession?.token
+        ? { 'x-principal-role': 'PRINCIPAL', 'x-principal-token': principalSession.token }
+        : roleHint === 'teacher' && teacherSession?.token
+        ? { 'x-teacher-token': teacherSession.token }
+        : buildActiveNotificationAuthHeaders();
+    try {
+      const res = await fetch(`/api/notifications/${encodeURIComponent(id)}/read`, {
+        method: 'POST',
+        headers,
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.accountNotifications) setAccountNotifications(data.accountNotifications);
+      }
+    } catch {
+      // Ignore transient offline acknowledgement
+    }
+  };
+
+  const handleMarkAllNotificationsRead = async (
+    roleHint?: 'teacher' | 'principal' | 'ao2'
+  ): Promise<void> => {
+    const headers: Record<string, string> =
+      roleHint === 'ao2' && ao2Session?.token
+        ? { 'x-admin-role': 'AO-II', 'x-ao2-token': ao2Session.token }
+        : roleHint === 'principal' && principalSession?.token
+        ? { 'x-principal-role': 'PRINCIPAL', 'x-principal-token': principalSession.token }
+        : roleHint === 'teacher' && teacherSession?.token
+        ? { 'x-teacher-token': teacherSession.token }
+        : buildActiveNotificationAuthHeaders();
+    try {
+      const res = await fetch('/api/notifications/mark-all-read', {
+        method: 'POST',
+        headers,
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.accountNotifications) setAccountNotifications(data.accountNotifications);
+      }
+    } catch {
+      // Ignore transient offline acknowledgement
+    }
+  };
+
   const handleUpdateAdmissionStatus = async (
     id: string,
     status: AdmissionsSubmission['status']
@@ -1024,8 +1197,6 @@ export default function App() {
     if (ao2Session?.token) {
       headers['x-admin-role'] = 'AO-II';
       headers['x-ao2-token'] = ao2Session.token;
-    } else if (principalSession?.token) {
-      headers['x-principal-token'] = principalSession.token;
     }
     return headers;
   };
@@ -1086,6 +1257,8 @@ export default function App() {
     setBackendConfig(data.backendConfig);
     setEnrollmentByYear(data.enrollmentByYear);
     setUploadedDocuments(data.uploadedDocuments);
+    setPrincipalDocuments(data.principalDocuments ?? []);
+    setAccountNotifications(data.accountNotifications ?? []);
     setAdmissionsSubmissions(data.admissionsSubmissions);
     setInventoryItems(data.inventoryItems ?? []);
     setMaterialRequisitions(data.materialRequisitions ?? []);
@@ -1096,6 +1269,11 @@ export default function App() {
     setHomePosts(data.homePosts ?? []);
     setTeacherNotes(data.teacherNotes ?? []);
     setStudentDocFeedback(data.studentDocFeedback ?? []);
+    setCalendarActivities(
+      Array.isArray(data.calendarActivities)
+        ? data.calendarActivities
+        : structuredClone(SCHOOL_CALENDAR_EVENTS)
+    );
     setAuditLog(data.auditLog);
     const nextTeacherAccounts = data.teacherAccounts ?? [];
     setTeacherAccounts(nextTeacherAccounts);
@@ -1318,6 +1496,36 @@ export default function App() {
       if (data.auditLog) setAuditLog(data.auditLog);
       return { ok: true };
     } catch {
+      const startMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(payload.startDate);
+      const endMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(payload.endDate);
+      if (startMatch && endMatch) {
+        const startMs = Date.UTC(
+          Number(startMatch[1]),
+          Number(startMatch[2]) - 1,
+          Number(startMatch[3])
+        );
+        const endMs = Date.UTC(
+          Number(endMatch[1]),
+          Number(endMatch[2]) - 1,
+          Number(endMatch[3])
+        );
+        for (let ms = startMs, steps = 0; ms <= endMs && steps < 366; ms += 86400000, steps++) {
+          const d = new Date(ms);
+          const iso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(
+            d.getUTCDate()
+          ).padStart(2, '0')}`;
+          const activeCount = leaveApplications.filter(
+            (app) =>
+              app.principalStatus !== 'Disapproved' && app.startDate <= iso && iso <= app.endDate
+          ).length;
+          if (activeCount >= 4) {
+            return {
+              ok: false,
+              error: `Daily leave application limit reached (maximum 4 applications on the same date): ${iso} (${activeCount}/4). Please choose another date.`,
+            };
+          }
+        }
+      }
       const localEntry: LeaveApplication = {
         id: `leave-offline-${Date.now()}`,
         applicantAccountId,
@@ -1586,6 +1794,103 @@ export default function App() {
       return { ok: false, error: data.error || 'Could not delete activity post.' };
     }
     setActivityPosts(data.activityPosts ?? []);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const buildCalendarAuthHeaders = (role: 'ao2' | 'principal'): Record<string, string> | null => {
+    if (role === 'ao2' && ao2Session?.token) {
+      return {
+        'x-admin-role': 'AO-II',
+        'x-ao2-token': ao2Session.token,
+      };
+    }
+    if (role === 'principal' && principalSession?.token) {
+      return {
+        'x-principal-role': 'PRINCIPAL',
+        'x-principal-token': principalSession.token,
+      };
+    }
+    return null;
+  };
+
+  const handleCreateCalendarActivity = async (
+    role: 'ao2' | 'principal',
+    payload: CalendarActivityMutationPayload
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const headers = buildCalendarAuthHeaders(role);
+    if (!headers) {
+      return {
+        ok: false,
+        error: 'Sign in with an AO-II or Principal account to add calendar activities.',
+      };
+    }
+    const res = await fetch('/api/calendar-activities', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not add calendar activity.' };
+    }
+    if (Array.isArray(data.calendarActivities)) setCalendarActivities(data.calendarActivities);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleUpdateCalendarActivity = async (
+    role: 'ao2' | 'principal',
+    id: string,
+    payload: CalendarActivityMutationPayload
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const headers = buildCalendarAuthHeaders(role);
+    if (!headers) {
+      return {
+        ok: false,
+        error: 'Sign in with an AO-II or Principal account to update calendar activities.',
+      };
+    }
+    const res = await fetch(`/api/calendar-activities/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not update calendar activity.' };
+    }
+    if (Array.isArray(data.calendarActivities)) setCalendarActivities(data.calendarActivities);
+    if (data.auditLog) setAuditLog(data.auditLog);
+    return { ok: true };
+  };
+
+  const handleDeleteCalendarActivity = async (
+    role: 'ao2' | 'principal',
+    id: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const headers = buildCalendarAuthHeaders(role);
+    if (!headers) {
+      return {
+        ok: false,
+        error: 'Sign in with an AO-II or Principal account to delete calendar activities.',
+      };
+    }
+    const res = await fetch(`/api/calendar-activities/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Could not delete calendar activity.' };
+    }
+    if (Array.isArray(data.calendarActivities)) setCalendarActivities(data.calendarActivities);
     if (data.auditLog) setAuditLog(data.auditLog);
     return { ok: true };
   };
@@ -2127,6 +2432,8 @@ export default function App() {
             backendConfig={backendConfig}
             enrollmentByYear={enrollmentByYear}
             uploadedDocuments={uploadedDocuments}
+            principalDocuments={principalDocuments}
+            accountNotifications={accountNotifications}
             admissionsSubmissions={admissionsSubmissions}
             inventoryItems={inventoryItems}
             materialRequisitions={materialRequisitions}
@@ -2137,6 +2444,7 @@ export default function App() {
             homePosts={homePosts}
             teacherNotes={teacherNotes}
             studentDocFeedback={studentDocFeedback}
+            calendarActivities={calendarActivities}
             auditLog={auditLog}
             teacherAccounts={teacherAccounts}
             principalAccount={principalAccount}
@@ -2169,6 +2477,10 @@ export default function App() {
             onUploadTeacherDocument={handleUploadTeacherDocument}
             onDeleteUploadedDocument={handleDeleteUploadedDocument}
             onPrincipalReviewDocument={handlePrincipalReviewDocument}
+            onUploadPrincipalDocument={handleUploadPrincipalDocument}
+            onAo2DeletePrincipalDocument={handleAo2DeletePrincipalDocument}
+            onMarkNotificationRead={handleMarkNotificationRead}
+            onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
             onUpdateAdmissionStatus={handleUpdateAdmissionStatus}
             onAo2AddStaffRecord={handleAo2AddStaffRecord}
             onAo2UpdateStaffRecord={handleAo2UpdateStaffRecord}
@@ -2183,6 +2495,9 @@ export default function App() {
             onDeleteActivityPost={handleDeleteActivityPost}
             onCreateHomePost={handleCreateHomePost}
             onDeleteHomePost={handleDeleteHomePost}
+            onCreateCalendarActivity={handleCreateCalendarActivity}
+            onUpdateCalendarActivity={handleUpdateCalendarActivity}
+            onDeleteCalendarActivity={handleDeleteCalendarActivity}
             onAo2FetchDatabase={handleAo2FetchDatabase}
             onAo2UpdateDbEnrollmentRow={handleAo2UpdateDbEnrollmentRow}
             onAo2DeleteDbRecord={handleAo2DeleteDbRecord}
@@ -2538,7 +2853,7 @@ export default function App() {
 
           <div className="relative z-10 max-w-[1200px] mx-auto px-6 py-14 lg:py-20">
             <div className="max-w-2xl md:max-w-none md:pr-[340px] lg:pr-[390px] space-y-6">
-              <p className="text-xs font-medium text-white/90 tracking-wide h-[18px]">
+              <p className="text-xs font-medium text-white/90 tracking-wide min-h-[18px] leading-snug max-w-2xl">
                 {frontendConfig.taglineLocation}
               </p>
               <h1 className="font-display text-[clamp(2.25rem,4.2vw,3.65rem)] leading-[1.08] font-semibold tracking-tight text-white max-w-2xl">
@@ -2696,7 +3011,10 @@ export default function App() {
         />
 
         {/* Section 4: Separate School Calendar of Activities (Home Page) */}
-        <SchoolCalendar accentColor={frontendConfig.accentColor} />
+        <SchoolCalendar
+          accentColor={frontendConfig.accentColor}
+          activities={calendarActivities}
+        />
 
 
 

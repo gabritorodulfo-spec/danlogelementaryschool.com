@@ -1,6 +1,6 @@
 export type SchoolDivision = 'Primary (K–3)' | 'Intermediate (4–6)';
 export type DivisionFilter = 'All Grades' | SchoolDivision;
-export type AcademicYear = '2026-2027' | '2025-2026';
+export type AcademicYear = '2026-2027';
 export type FacilityCategory = 'All Spaces' | 'Sciences' | 'Humanities' | 'Arts & Design';
 
 export interface GradeEnrollmentRow {
@@ -71,8 +71,9 @@ export interface SchoolDispatch {
 }
 
 export const HERO_CAMPUS = {
-  kicker: 'Danlog Elementary School · District of Pilar II · Established 1975',
-  headline: 'Nurturing curious young learners through reading, discovery, and community.',
+  kicker: 'Schools Division of Sorsogon | Danlog Elementary School | District of Pillar II',
+  headline:
+    'Committed to serve with Excellence. Empowering every learner equipped with the 21st century skills.',
   lead: 'Since 1975, Danlog Elementary School has guided Kindergarten through Grade 6 pupils across Pilar II—combining structured foundational literacy, hands-on garden science, dedicated classroom teachers, and transparent grade-level enrollment.',
   image: '/assets/aistudio/image_608d5cb7_43662196.jpg',
   imageAlt: 'Danlog Elementary School classroom building with green doors, landscaped garden, and coconut palms in Pilar II',
@@ -448,99 +449,6 @@ export const INITIAL_ENROLLMENT_BY_YEAR: Record<AcademicYear, GradeEnrollmentRow
       curriculumFocus: 'Junior High Readiness, Research Writing & MAPEH Showcase',
     },
   ],
-  '2025-2026': [
-    {
-      id: 'k',
-      gradeLabel: 'Kindergarten',
-      shortLabel: 'K',
-      gradeOrder: 0,
-      division: 'Primary (K–3)',
-      enrolledStudents: 55,
-      capacity: 64,
-      teachers: 3,
-      sections: 2,
-      facultyLead: 'Marisol Mendoza, M.Ed.',
-      curriculumFocus: 'Early Literacy, Number Bonds & Eco-Garden Discovery',
-    },
-    {
-      id: 'g1',
-      gradeLabel: 'Grade 1',
-      shortLabel: 'Gr 1',
-      gradeOrder: 1,
-      division: 'Primary (K–3)',
-      enrolledStudents: 62,
-      capacity: 70,
-      teachers: 3,
-      sections: 2,
-      facultyLead: 'Clarissa Dizon, LPT',
-      curriculumFocus: 'Structured Phonics, Addition/Subtraction & Mother Tongue',
-    },
-    {
-      id: 'g2',
-      gradeLabel: 'Grade 2',
-      shortLabel: 'Gr 2',
-      gradeOrder: 2,
-      division: 'Primary (K–3)',
-      enrolledStudents: 66,
-      capacity: 72,
-      teachers: 3,
-      sections: 2,
-      facultyLead: 'Rafael Navarro, LPT',
-      curriculumFocus: 'Reading Fluency, Multiplication & Community Helpers',
-    },
-    {
-      id: 'g3',
-      gradeLabel: 'Grade 3',
-      shortLabel: 'Gr 3',
-      gradeOrder: 3,
-      division: 'Primary (K–3)',
-      enrolledStudents: 69,
-      capacity: 76,
-      teachers: 3,
-      sections: 2,
-      facultyLead: 'Teresa Villanueva, M.A.',
-      curriculumFocus: 'Introductory Science Labs, Fractions & Pilar II History',
-    },
-    {
-      id: 'g4',
-      gradeLabel: 'Grade 4',
-      shortLabel: 'Gr 4',
-      gradeOrder: 4,
-      division: 'Intermediate (4–6)',
-      enrolledStudents: 70,
-      capacity: 80,
-      teachers: 4,
-      sections: 2,
-      facultyLead: 'Arnel Bautista, LPT',
-      curriculumFocus: 'Earth Science, EPP Garden Craft & Paragraph Composition',
-    },
-    {
-      id: 'g5',
-      gradeLabel: 'Grade 5',
-      shortLabel: 'Gr 5',
-      gradeOrder: 5,
-      division: 'Intermediate (4–6)',
-      enrolledStudents: 68,
-      capacity: 78,
-      teachers: 4,
-      sections: 2,
-      facultyLead: 'Roberto Santos, M.A.Ed.',
-      curriculumFocus: 'Watershed Science Fair, Decimals & Philippine History',
-    },
-    {
-      id: 'g6',
-      gradeLabel: 'Grade 6',
-      shortLabel: 'Gr 6',
-      gradeOrder: 6,
-      division: 'Intermediate (4–6)',
-      enrolledStudents: 67,
-      capacity: 76,
-      teachers: 3,
-      sections: 2,
-      facultyLead: 'Lourdes Evangelista, M.A.',
-      curriculumFocus: 'Junior High Readiness, Research Writing & MAPEH Showcase',
-    },
-  ],
 };
 
 export const FACULTY_BY_DEPARTMENT: Record<AcademicYear, DepartmentFacultyCount[]> = {
@@ -549,12 +457,6 @@ export const FACULTY_BY_DEPARTMENT: Record<AcademicYear, DepartmentFacultyCount[
     { department: 'English, Filipino & Reading', divisionScope: 'Grades K–6', teachers: 5, advancedDegreesPct: '80%' },
     { department: 'Mathematics & Science', divisionScope: 'Grades 3–6', teachers: 5, advancedDegreesPct: '80%' },
     { department: 'EPP, MAPEH & Values Education', divisionScope: 'Grades 1–6', teachers: 5, advancedDegreesPct: '60%' },
-  ],
-  '2025-2026': [
-    { department: 'Kindergarten & Primary Homeroom', divisionScope: 'Grades K–3', teachers: 9, advancedDegreesPct: '67%' },
-    { department: 'English, Filipino & Reading', divisionScope: 'Grades K–6', teachers: 5, advancedDegreesPct: '80%' },
-    { department: 'Mathematics & Science', divisionScope: 'Grades 3–6', teachers: 5, advancedDegreesPct: '80%' },
-    { department: 'EPP, MAPEH & Values Education', divisionScope: 'Grades 1–6', teachers: 4, advancedDegreesPct: '50%' },
   ],
 };
 
@@ -846,16 +748,12 @@ export const ACTIVITIES_GALLERY: ActivityPhotoItem[] = [
   },
 ];
 
-export type CalendarMonthFilter =
-  | 'All Months'
-  | 'November 2026'
-  | 'December 2026'
-  | 'January 2027'
-  | 'February 2027';
+export type CalendarMonthFilter = 'All Months' | string;
 
 export interface CalendarActivityItem {
   id: string;
-  monthGroup: Exclude<CalendarMonthFilter, 'All Months'>;
+  eventDate?: string;
+  monthGroup: string;
   monthShort: string;
   dayNumber: string;
   dayOfWeek: string;
@@ -865,11 +763,14 @@ export interface CalendarActivityItem {
   timeRange: string;
   venue: string;
   details: string;
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 export const SCHOOL_CALENDAR_EVENTS: CalendarActivityItem[] = [
   {
     id: 'cal-1',
+    eventDate: '2026-11-19',
     monthGroup: 'November 2026',
     monthShort: 'NOV',
     dayNumber: '19',
@@ -883,6 +784,7 @@ export const SCHOOL_CALENDAR_EVENTS: CalendarActivityItem[] = [
   },
   {
     id: 'cal-2',
+    eventDate: '2026-11-21',
     monthGroup: 'November 2026',
     monthShort: 'NOV',
     dayNumber: '21',
@@ -896,6 +798,7 @@ export const SCHOOL_CALENDAR_EVENTS: CalendarActivityItem[] = [
   },
   {
     id: 'cal-3',
+    eventDate: '2026-12-05',
     monthGroup: 'December 2026',
     monthShort: 'DEC',
     dayNumber: '05',
@@ -909,6 +812,7 @@ export const SCHOOL_CALENDAR_EVENTS: CalendarActivityItem[] = [
   },
   {
     id: 'cal-4',
+    eventDate: '2026-12-11',
     monthGroup: 'December 2026',
     monthShort: 'DEC',
     dayNumber: '11',
@@ -922,6 +826,7 @@ export const SCHOOL_CALENDAR_EVENTS: CalendarActivityItem[] = [
   },
   {
     id: 'cal-5',
+    eventDate: '2026-12-17',
     monthGroup: 'December 2026',
     monthShort: 'DEC',
     dayNumber: '17',
@@ -935,6 +840,7 @@ export const SCHOOL_CALENDAR_EVENTS: CalendarActivityItem[] = [
   },
   {
     id: 'cal-6',
+    eventDate: '2027-01-14',
     monthGroup: 'January 2027',
     monthShort: 'JAN',
     dayNumber: '14',
@@ -948,6 +854,7 @@ export const SCHOOL_CALENDAR_EVENTS: CalendarActivityItem[] = [
   },
   {
     id: 'cal-7',
+    eventDate: '2027-01-23',
     monthGroup: 'January 2027',
     monthShort: 'JAN',
     dayNumber: '23',
@@ -961,6 +868,7 @@ export const SCHOOL_CALENDAR_EVENTS: CalendarActivityItem[] = [
   },
   {
     id: 'cal-8',
+    eventDate: '2027-02-06',
     monthGroup: 'February 2027',
     monthShort: 'FEB',
     dayNumber: '06',
@@ -974,6 +882,7 @@ export const SCHOOL_CALENDAR_EVENTS: CalendarActivityItem[] = [
   },
   {
     id: 'cal-9',
+    eventDate: '2027-02-18',
     monthGroup: 'February 2027',
     monthShort: 'FEB',
     dayNumber: '18',

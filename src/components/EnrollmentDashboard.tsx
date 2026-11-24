@@ -10,7 +10,6 @@ import {
   Search,
   ShieldCheck,
   Users,
-  X,
 } from 'lucide-react';
 import {
   AcademicYear,
@@ -126,16 +125,6 @@ export function EnrollmentDashboard({
     };
   }, [filteredRows]);
 
-  const maxCapacity = useMemo(
-    () => Math.max(80, ...currentYearRows.map((r) => Math.max(r.capacity, r.enrolledStudents))),
-    [currentYearRows]
-  );
-
-  const selectedGrade = useMemo(
-    () => currentYearRows.find((r) => r.id === selectedGradeId) ?? null,
-    [currentYearRows, selectedGradeId]
-  );
-
   const departmentBreakdown = FACULTY_BY_DEPARTMENT[academicYear];
 
   const handleDelta = (
@@ -204,8 +193,8 @@ export function EnrollmentDashboard({
                 Students enrolled per grade level and teaching faculty distribution.
               </h2>
               <p className="text-sm md:text-base text-[#D7E9E0]">
-                Click any summary card, chart column, department, or table row to drill into
-                Kindergarten through Grade 6 class sizes and seat capacities.
+                Click any summary card, department, or table row to inspect Kindergarten through
+                Grade 6 class sizes and seat capacities.
               </p>
             </div>
 
@@ -214,7 +203,7 @@ export function EnrollmentDashboard({
               aria-label="Academic year"
               className="inline-flex items-center p-1 bg-white/12 backdrop-blur-sm rounded-xl border border-white/25 shrink-0 self-start lg:self-auto"
             >
-              {(['2026-2027', '2025-2026'] as AcademicYear[]).map((year) => {
+              {(['2026-2027'] as AcademicYear[]).map((year) => {
                 const active = academicYear === year;
                 return (
                   <button
@@ -426,281 +415,71 @@ export function EnrollmentDashboard({
           </div>
         </div>
 
-        {/* Visual Chart + Department Faculty Summary */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-          <div className="lg:col-span-8 bg-white/95 backdrop-blur-xs rounded-xl border border-[#D2DFD7] overflow-hidden flex flex-col justify-between shadow-xs">
-            <div className="px-6 py-4 bg-gradient-to-r from-[#ECFDF5]/80 via-[#F8FBFA] to-[#EFF6FF]/80 border-b border-[#DCE6E0] flex flex-wrap items-baseline justify-between gap-4">
-              <div>
-                <h3 className="font-display text-lg font-semibold text-[#111315]">
-                  Enrolled Students vs. Grade Capacity ({academicYear})
-                </h3>
-                <p className="text-xs text-[#525866]">
-                  Click any grade bar to inspect room capacity, advisor, and section breakdown.
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-4 text-xs text-[#475569] font-medium">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-xs bg-[#15803D] inline-block" />
-                  Primary (K–3)
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-xs bg-[#0284C7] inline-block" />
-                  Intermediate (4–6)
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-xs bg-[#E6ECE9] border border-[#C6D5CC] inline-block" />
-                  Seat Capacity
-                </span>
-              </div>
-            </div>
-
-            <div className="p-6 flex-1 flex flex-col justify-end space-y-5">
-              {filteredRows.length === 0 ? (
-                <div className="py-12 text-center space-y-3 border border-dashed border-[#C6D5CC] rounded-xl bg-[#F7FAF8]">
-                  <p className="text-sm font-medium text-[#111315]">
-                    No grade levels match “{searchQuery}”.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearchQuery('');
-                      setDivisionFilter('All Grades');
-                      setSelectedDepartment(null);
-                      setSelectedGradeId(null);
-                    }}
-                    style={{ backgroundColor: accentColor }}
-                    className="px-4 py-2 text-xs font-semibold text-white rounded-lg cursor-pointer"
-                  >
-                    Clear Filters
-                  </button>
-                </div>
-              ) : (
-                <div className="pt-4">
-                  <div className="relative">
-                    <div
-                      aria-hidden="true"
-                      className="pointer-events-none absolute inset-x-0 top-0 bottom-2 flex flex-col justify-between"
-                    >
-                      <div className="border-t border-dashed border-[#E2EAE5]" />
-                      <div className="border-t border-dashed border-[#E2EAE5]" />
-                      <div className="border-t border-dashed border-[#E2EAE5]" />
-                    </div>
-
-                    <div className="relative grid grid-cols-7 gap-3 sm:gap-4 items-end h-52 border-b border-[#D2DFD7] pb-2">
-                      {currentYearRows.map((row) => {
-                        const isVisible = filteredRows.some((f) => f.id === row.id);
-                        const capacityHeightPct = Math.min(
-                          100,
-                          Math.round((row.capacity / maxCapacity) * 100)
-                        );
-                        const fillWithinCap =
-                          row.capacity > 0
-                            ? Math.min(100, Math.round((row.enrolledStudents / row.capacity) * 100))
-                            : 0;
-                        const isSelected = selectedGradeId === row.id;
-                        const isHighlighted = hoveredGradeId === row.id || isSelected;
-                        const isPrimary = row.division === 'Primary (K–3)';
-                        const barColor = isPrimary
-                          ? isHighlighted
-                            ? '#166534'
-                            : '#15803D'
-                          : isHighlighted
-                            ? '#0369A1'
-                            : '#0284C7';
-
-                        return (
-                          <button
-                            key={row.id}
-                            type="button"
-                            onClick={() =>
-                              setSelectedGradeId((prev) => (prev === row.id ? null : row.id))
-                            }
-                            onMouseEnter={() => setHoveredGradeId(row.id)}
-                            onMouseLeave={() => setHoveredGradeId(null)}
-                            aria-pressed={isSelected}
-                            aria-label={`Inspect ${row.gradeLabel}: ${row.enrolledStudents} of ${row.capacity} pupils`}
-                            className={`h-full flex flex-col items-center justify-end gap-1.5 transition-opacity duration-150 cursor-pointer rounded-lg p-1 ${
-                              isVisible ? 'opacity-100' : 'opacity-25'
-                            } ${isSelected ? 'bg-[#ECFDF5] ring-1 ring-[#15803D]/40' : ''}`}
-                          >
-                            <span className="font-mono text-xs tabular-nums font-semibold text-[#111315]">
-                              {row.enrolledStudents}
-                            </span>
-                            <div className="relative w-full max-w-[40px] flex-1 flex items-end justify-center">
-                              <div
-                                style={{ height: `${capacityHeightPct}%` }}
-                                className="w-full bg-[#E8EFEA] border border-[#CBD8D0] rounded-t-md relative flex items-end overflow-hidden"
-                                title={`${row.gradeLabel}: ${row.enrolledStudents}/${row.capacity} pupils, ${row.teachers} teachers`}
-                              >
-                                <div
-                                  style={{
-                                    height: `${fillWithinCap}%`,
-                                    backgroundColor: barColor,
-                                  }}
-                                  className="w-full transition-colors duration-150 rounded-t-xs"
-                                />
-                              </div>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-7 gap-3 sm:gap-4 pt-2.5 text-center">
-                    {currentYearRows.map((row) => {
-                      const isPrimary = row.division === 'Primary (K–3)';
-                      const isSelected = selectedGradeId === row.id;
-                      return (
-                        <button
-                          key={row.id}
-                          type="button"
-                          onClick={() =>
-                            setSelectedGradeId((prev) => (prev === row.id ? null : row.id))
-                          }
-                          className={`space-y-0.5 rounded-md py-1 cursor-pointer transition-colors ${
-                            isSelected ? 'bg-[#ECFDF5]' : 'hover:bg-[#F5F9F6]'
-                          }`}
-                        >
-                          <div className="text-xs font-semibold text-[#111315]">
-                            {row.shortLabel}
-                          </div>
-                          <div
-                            className={`font-mono text-[11px] tabular-nums font-medium ${
-                              isPrimary ? 'text-[#15803D]' : 'text-[#0369A1]'
-                            }`}
-                          >
-                            {row.teachers}T
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Interactive Selected Grade Spotlight */}
-              {selectedGrade && (
-                <div className="rounded-xl border border-[#A7F3D0] bg-[#F3FBF7] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <div className="text-[11px] font-semibold text-[#047857]">
-                      Selected Grade · {selectedGrade.division}
-                    </div>
-                    <div className="text-sm font-semibold text-[#111315]">
-                      {selectedGrade.gradeLabel} — Lead: {selectedGrade.facultyLead}
-                    </div>
-                    <div className="text-xs text-[#525866]">
-                      Focus: {selectedGrade.curriculumFocus} ·{' '}
-                      <span className="font-mono tabular-nums font-semibold text-[#111315]">
-                        {selectedGrade.enrolledStudents}/{selectedGrade.capacity} seats (
-                        {Math.max(0, selectedGrade.capacity - selectedGrade.enrolledStudents)} open)
-                      </span>{' '}
-                      · {selectedGrade.sections} sections · {selectedGrade.teachers} teachers
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    {canEdit && (
-                      <div className="inline-flex items-center gap-1.5 bg-white px-2.5 py-1.5 rounded-lg border border-[#CBD8D0]">
-                        <span className="text-[11px] font-semibold text-[#525866]">Students:</span>
-                        <button
-                          type="button"
-                          onClick={() => handleDelta(selectedGrade, 'enrolledStudents', -1)}
-                          className="w-6 h-6 inline-flex items-center justify-center rounded border border-[#DCE0E6] hover:bg-[#F8F9FA] cursor-pointer"
-                          aria-label={`Decrease enrolled students for ${selectedGrade.gradeLabel}`}
-                        >
-                          <Minus className="w-3 h-3" />
-                        </button>
-                        <span className="font-mono text-xs font-semibold tabular-nums w-6 text-center">
-                          {selectedGrade.enrolledStudents}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleDelta(selectedGrade, 'enrolledStudents', 1)}
-                          className="w-6 h-6 inline-flex items-center justify-center rounded border border-[#DCE0E6] hover:bg-[#F8F9FA] cursor-pointer"
-                          aria-label={`Increase enrolled students for ${selectedGrade.gradeLabel}`}
-                        >
-                          <Plus className="w-3 h-3" />
-                        </button>
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setSelectedGradeId(null)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-[#525866] hover:text-[#111315] bg-white border border-[#DCE0E6] rounded-lg cursor-pointer whitespace-nowrap shrink-0"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                      <span>Close</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="lg:col-span-4 bg-white/95 backdrop-blur-xs rounded-xl border border-[#D2DFD7] overflow-hidden flex flex-col justify-between shadow-xs">
-            <div className="px-6 py-4 bg-gradient-to-r from-[#EFF6FF]/90 to-[#F0FDFA]/90 border-b border-[#DCE6E0] space-y-1">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="font-display text-lg font-semibold text-[#111315]">
-                  Teachers by Department
-                </h3>
-                {selectedDepartment && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedDepartment(null);
-                      setDivisionFilter('All Grades');
-                    }}
-                    className="text-[11px] font-semibold text-[#15803D] hover:underline cursor-pointer"
-                  >
-                    Reset
-                  </button>
-                )}
-              </div>
+        {/* Department Faculty Summary */}
+        <div className="bg-white/95 backdrop-blur-xs rounded-xl border border-[#D2DFD7] overflow-hidden flex flex-col justify-between shadow-xs">
+          <div className="px-6 py-4 bg-gradient-to-r from-[#EFF6FF]/90 to-[#F0FDFA]/90 border-b border-[#DCE6E0] flex flex-wrap items-center justify-between gap-2">
+            <div className="space-y-0.5">
+              <h3 className="font-display text-lg font-semibold text-[#111315]">
+                Teachers by Department
+              </h3>
               <p className="text-xs text-[#525866]">
                 Click a department to scope the dashboard to its grade division.
               </p>
             </div>
+            {selectedDepartment && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedDepartment(null);
+                  setDivisionFilter('All Grades');
+                }}
+                className="text-xs font-semibold text-[#15803D] hover:underline cursor-pointer"
+              >
+                Reset
+              </button>
+            )}
+          </div>
 
-            <div className="divide-y divide-[#E5ECE8] flex-1 px-4 py-1">
-              {departmentBreakdown.map((dept, index) => {
-                const badgeClass =
-                  DEPARTMENT_SWATCHES[index % DEPARTMENT_SWATCHES.length];
-                const active = selectedDepartment === dept.department;
-                return (
-                  <button
-                    key={dept.department}
-                    type="button"
-                    onClick={() => handleDepartmentClick(dept.department, dept.divisionScope)}
-                    aria-pressed={active}
-                    className={`w-full text-left py-3 px-2 rounded-lg flex items-center justify-between gap-4 transition-colors cursor-pointer ${
-                      active ? 'bg-[#ECFDF5]' : 'hover:bg-[#F8FAF9]'
-                    }`}
-                  >
-                    <div className="space-y-0.5 min-w-0">
-                      <div className="text-xs font-semibold text-[#111315] truncate">
-                        {dept.department}
-                      </div>
-                      <div className="text-[11px] text-[#525866]">
-                        {dept.divisionScope} · {dept.advancedDegreesPct} Adv. Degrees
-                      </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 p-5">
+            {departmentBreakdown.map((dept, index) => {
+              const badgeClass =
+                DEPARTMENT_SWATCHES[index % DEPARTMENT_SWATCHES.length];
+              const active = selectedDepartment === dept.department;
+              return (
+                <button
+                  key={dept.department}
+                  type="button"
+                  onClick={() => handleDepartmentClick(dept.department, dept.divisionScope)}
+                  aria-pressed={active}
+                  className={`w-full text-left py-3 px-3.5 rounded-xl border flex items-center justify-between gap-4 transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-[#ECFDF5] border-[#15803D]/40'
+                      : 'bg-[#F9FBFA] border-[#E5ECE8] hover:bg-[#F3F8F5]'
+                  }`}
+                >
+                  <div className="space-y-0.5 min-w-0">
+                    <div className="text-xs font-semibold text-[#111315] truncate">
+                      {dept.department}
                     </div>
-                    <span
-                      className={`font-mono text-xs font-semibold tabular-nums shrink-0 px-2.5 py-1 rounded-md border ${badgeClass}`}
-                    >
-                      {dept.teachers}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+                    <div className="text-[11px] text-[#525866]">
+                      {dept.divisionScope} · {dept.advancedDegreesPct} Adv. Degrees
+                    </div>
+                  </div>
+                  <span
+                    className={`font-mono text-xs font-semibold tabular-nums shrink-0 px-2.5 py-1 rounded-md border ${badgeClass}`}
+                  >
+                    {dept.teachers}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
 
-            <div className="px-6 py-3.5 bg-[#0F3828] text-white flex items-center justify-between text-xs font-semibold">
-              <span>Total Campus Instructional Faculty</span>
-              <span className="font-mono tabular-nums text-[#A7F3D0]">
-                {departmentBreakdown.reduce((sum, d) => sum + d.teachers, 0)} Teachers
-              </span>
-            </div>
+          <div className="px-6 py-3.5 bg-[#0F3828] text-white flex items-center justify-between text-xs font-semibold">
+            <span>Total Campus Instructional Faculty</span>
+            <span className="font-mono tabular-nums text-[#A7F3D0]">
+              {departmentBreakdown.reduce((sum, d) => sum + d.teachers, 0)} Teachers
+            </span>
           </div>
         </div>
 
@@ -714,7 +493,7 @@ export function EnrollmentDashboard({
               <p className="text-xs text-[#525866]">
                 {canEdit
                   ? 'AO-II Edit Mode active — click any column header to sort or use +/− controls to update counts.'
-                  : 'Click column headers to sort or click a row to spotlight its grade capacity above.'}
+                  : 'Click column headers to sort grade-level enrollment and faculty data.'}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">

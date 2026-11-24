@@ -1000,7 +1000,6 @@ export function Ao2StaffStudentsManager({
               >
                 <option value="ALL">All School Years</option>
                 <option value="2026-2027">SY 2026–2027</option>
-                <option value="2025-2026">SY 2025–2026</option>
               </select>
 
               <select
@@ -1130,7 +1129,6 @@ export function Ao2StaffStudentsManager({
                     className="w-full px-3 py-2 text-xs rounded-lg border border-[#DCE0E6] bg-[#F8F9FA]"
                   >
                     <option value="2026-2027">SY 2026–2027</option>
-                    <option value="2025-2026">SY 2025–2026</option>
                   </select>
                 </div>
                 <div>

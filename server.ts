@@ -6,12 +6,15 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import {
   INITIAL_ENROLLMENT_BY_YEAR,
+  SCHOOL_CALENDAR_EVENTS,
   TEACHER_PORTAL_PROFILES,
   type AcademicYear,
   type AttendanceStatus,
+  type CalendarActivityItem,
   type GradeEnrollmentRow,
 } from './src/data/schoolData.ts';
 import type {
+  AccountNotification,
   ActivityPostCategory,
   ActivityPostItem,
   AdminAuditEntry,
@@ -31,6 +34,8 @@ import type {
   LeaveType,
   MaterialRequisition,
   MaterialRequisitionCategory,
+  PrincipalDocument,
+  PrincipalDocumentCategory,
   PrincipalRequisitionStatus,
   RequisitionUrgency,
   SchoolSystemBootstrap,
@@ -78,8 +83,11 @@ interface SchoolServerStore
   removedLegacyPlaceholders?: boolean;
   assignedCadagPrincipal?: boolean;
   leaveApplications: LeaveApplication[];
+  principalDocuments: PrincipalDocument[];
+  accountNotifications: AccountNotification[];
   teacherNotes: TeacherAdvisoryNote[];
   studentDocFeedback: StudentDocFeedbackEntry[];
+  calendarActivities: CalendarActivityItem[];
 }
 
 function getAllAo2Credentials(store: SchoolServerStore): Ao2CredentialRecord[] {
@@ -1285,6 +1293,8 @@ function toBootstrapPayload(store: SchoolServerStore): SchoolSystemBootstrap {
     backendConfig: store.backendConfig,
     enrollmentByYear: store.enrollmentByYear,
     uploadedDocuments: store.uploadedDocuments,
+    principalDocuments: store.principalDocuments ?? [],
+    accountNotifications: store.accountNotifications ?? [],
     admissionsSubmissions: store.admissionsSubmissions,
     inventoryItems: store.inventoryItems,
     materialRequisitions: store.materialRequisitions,
@@ -1295,6 +1305,7 @@ function toBootstrapPayload(store: SchoolServerStore): SchoolSystemBootstrap {
     homePosts: store.homePosts,
     teacherNotes: store.teacherNotes ?? [],
     studentDocFeedback: store.studentDocFeedback ?? [],
+    calendarActivities: store.calendarActivities ?? [],
     auditLog: store.auditLog,
     teacherAccounts,
     principalAccount,
@@ -1306,8 +1317,9 @@ function toBootstrapPayload(store: SchoolServerStore): SchoolSystemBootstrap {
 function buildDefaultState(): SchoolServerStore {
   const defaultFrontend: SiteFrontendConfig = {
     schoolName: 'Danlog Elementary School',
-    taglineLocation: 'Danlog Elementary School · District of Pilar II · Established 1975',
-    heroHeadline: 'Nurturing curious young learners through reading, discovery, and community.',
+    taglineLocation: 'Schools Division of Sorsogon | Danlog Elementary School | District of Pillar II',
+    heroHeadline:
+      'Committed to serve with Excellence. Empowering every learner equipped with the 21st century skills.',
     heroLead:
       'Since 1975, Danlog Elementary School has guided Kindergarten through Grade 6 pupils across Pilar II—combining structured foundational literacy, hands-on garden science, dedicated classroom teachers, and transparent grade-level enrollment.',
     heroImage: '/assets/aistudio/image_608d5cb7_43662196.jpg',
@@ -1441,6 +1453,8 @@ function buildDefaultState(): SchoolServerStore {
     backendConfig: defaultBackend,
     enrollmentByYear: structuredClone(INITIAL_ENROLLMENT_BY_YEAR),
     uploadedDocuments: defaultUploadedDocs,
+    principalDocuments: [],
+    accountNotifications: [],
     admissionsSubmissions: defaultAdmissions,
     inventoryItems: buildDefaultInventoryItems(),
     materialRequisitions: buildDefaultMaterialRequisitions(),
@@ -1451,6 +1465,7 @@ function buildDefaultState(): SchoolServerStore {
     homePosts: buildDefaultHomePosts(),
     teacherNotes: buildDefaultTeacherNotes(),
     studentDocFeedback: [],
+    calendarActivities: structuredClone(SCHOOL_CALENDAR_EVENTS),
     auditLog: defaultAudit,
     teacherCredentials,
     principalCredential: null,
@@ -1487,12 +1502,30 @@ function loadStore(): SchoolServerStore {
     try {
       const parsed = recovered;
       if (parsed.frontendConfig?.schoolName === 'Danlog Elementary School') {
-        let dirty = !primary;
+        let dirty = !primary || !fs.existsSync(BACKUP_STORE_PATH);
         if (
           parsed.frontendConfig.heroImage ===
           '/src/assets/images/hero_colorful_education_1794812726997.jpg'
         ) {
           parsed.frontendConfig.heroImage = '/assets/aistudio/image_608d5cb7_43662196.jpg';
+          dirty = true;
+        }
+        if (
+          parsed.frontendConfig.taglineLocation ===
+            'Danlog Elementary School · District of Pilar II · Established 1975' ||
+          parsed.frontendConfig.taglineLocation ===
+            'Committed to serve with Excellence. Empowering every learner equipped with the 21st century skills.'
+        ) {
+          parsed.frontendConfig.taglineLocation =
+            'Schools Division of Sorsogon | Danlog Elementary School | District of Pillar II';
+          dirty = true;
+        }
+        if (
+          parsed.frontendConfig.heroHeadline ===
+          'Nurturing curious young learners through reading, discovery, and community.'
+        ) {
+          parsed.frontendConfig.heroHeadline =
+            'Committed to serve with Excellence. Empowering every learner equipped with the 21st century skills.';
           dirty = true;
         }
         if (!Array.isArray(parsed.teacherCredentials)) {
@@ -1647,6 +1680,18 @@ function loadStore(): SchoolServerStore {
           parsed.studentDocFeedback = [];
           dirty = true;
         }
+        if (!Array.isArray(parsed.principalDocuments)) {
+          parsed.principalDocuments = [];
+          dirty = true;
+        }
+        if (!Array.isArray(parsed.accountNotifications)) {
+          parsed.accountNotifications = [];
+          dirty = true;
+        }
+        if (!Array.isArray(parsed.calendarActivities)) {
+          parsed.calendarActivities = structuredClone(SCHOOL_CALENDAR_EVENTS);
+          dirty = true;
+        }
         if (!parsed.removedLegacyPlaceholders) {
           const hadLegacyStaff = parsed.staffRecords.some(
             (s) =>
@@ -1763,6 +1808,27 @@ function loadStore(): SchoolServerStore {
           dirty = true;
         }
         const normalized = parsed as SchoolServerStore;
+        const enrollmentRecordMap = normalized.enrollmentByYear as unknown as Record<string, unknown>;
+        if (
+          normalized.enrollmentByYear &&
+          Object.prototype.hasOwnProperty.call(enrollmentRecordMap, '2025-2026')
+        ) {
+          delete enrollmentRecordMap['2025-2026'];
+          dirty = true;
+        }
+        if (Array.isArray(normalized.studentRecords)) {
+          const filteredStudents = normalized.studentRecords.filter(
+            (st) => (st.academicYear as string) !== '2025-2026'
+          );
+          if (filteredStudents.length !== normalized.studentRecords.length) {
+            normalized.studentRecords = filteredStudents;
+            dirty = true;
+          }
+        }
+        if ((normalized.backendConfig?.activeAcademicYear as string) === '2025-2026') {
+          normalized.backendConfig.activeAcademicYear = '2026-2027';
+          dirty = true;
+        }
         if (ensureRetainedStaffInStore(normalized)) {
           dirty = true;
         }
@@ -1789,8 +1855,8 @@ function saveStore(state: SchoolServerStore): void {
     fs.writeFileSync(TMP_STORE_PATH, serialized, 'utf-8');
     fs.renameSync(TMP_STORE_PATH, STORE_PATH);
     fs.writeFileSync(BACKUP_STORE_PATH, serialized, 'utf-8');
-  } catch {
-    // Ignore disk write issues in read-only environments; keep in-memory state
+  } catch (err) {
+    console.error('[school-db] Failed to persist school store to disk:', err);
   }
 }
 
@@ -3063,6 +3129,8 @@ async function startServer() {
   app.put('/api/teacher-documents/:docId/file', (req, res) => {
     const token = req.header('x-teacher-token') ?? '';
     const sessionTeacherId = teacherSessions.get(token);
+    const ao2Token = req.header('x-ao2-token') ?? '';
+    const isAo2 = req.header('x-admin-role') === 'AO-II' && ao2Sessions.has(ao2Token);
     const { docId } = req.params;
     const doc = store.uploadedDocuments.find((d) => d.id === docId);
 
@@ -3070,8 +3138,15 @@ async function startServer() {
       res.status(404).json({ error: 'Document record not found.' });
       return;
     }
-    if (!sessionTeacherId || sessionTeacherId !== doc.teacherId) {
+    if (!isAo2 && (!sessionTeacherId || sessionTeacherId !== doc.teacherId)) {
       res.status(401).json({ error: 'Authentication required to attach file content.' });
+      return;
+    }
+    if (doc.hasStoredFile && !isAo2) {
+      res.status(403).json({
+        error:
+          'Document file is already saved in the database. Only an AO-II account can alter saved files.',
+      });
       return;
     }
 
@@ -3292,6 +3367,392 @@ async function startServer() {
     res.json({ uploadedDocuments: store.uploadedDocuments, auditLog: store.auditLog });
   });
 
+  // =========================================================================
+  // PRINCIPAL DOCUMENT UPLOADS + AUTOMATIC NOTIFICATIONS TO ALL ACCOUNTS
+  // =========================================================================
+
+  const VALID_PRINCIPAL_DOC_CATEGORIES: PrincipalDocumentCategory[] = [
+    'School Memorandum',
+    'Division Circular',
+    'Faculty Directive',
+    'Policy & Guidelines',
+    'Event Notice',
+    'Official Form',
+    'General',
+  ];
+
+  function collectAllPortalAccountIds(state: SchoolServerStore): string[] {
+    const ids = new Set<string>();
+    for (const cred of state.teacherCredentials ?? []) {
+      if (cred.teacherId) ids.add(cred.teacherId);
+    }
+    if (state.principalCredential) {
+      const principalStaffId = getPrincipalStaffRecord(state)?.id ?? 'staff-danlog-cadag';
+      ids.add(principalStaffId);
+    }
+    for (const ao2Cred of getAllAo2Credentials(state)) {
+      if (ao2Cred.accountId) ids.add(ao2Cred.accountId);
+    }
+    return Array.from(ids);
+  }
+
+  app.post('/api/principal/documents/upload', (req, res) => {
+    const token = req.header('x-principal-token') ?? '';
+    if (req.header('x-principal-role') !== 'PRINCIPAL' || !principalSessions.has(token)) {
+      res.status(401).json({
+        error: 'Authentication required: Sign in with your Principal account to upload documents.',
+      });
+      return;
+    }
+
+    const body = (req.body ?? {}) as {
+      title?: string;
+      category?: PrincipalDocumentCategory;
+      fileName?: string;
+      fileSizeBytes?: number;
+      notes?: string;
+      documentContent?: string;
+      mimeType?: string;
+    };
+
+    const title = String(body.title ?? '').trim();
+    const fileName = String(body.fileName ?? '').trim();
+    const fileSizeBytes = Number(body.fileSizeBytes ?? 0);
+
+    if (!fileName || title.length < 3) {
+      res.status(400).json({ error: 'Document title (min 3 characters) and file are required.' });
+      return;
+    }
+
+    const ext = path.extname(fileName).toLowerCase();
+    if (
+      store.backendConfig.allowedExtensions.length > 0 &&
+      !store.backendConfig.allowedExtensions.includes(ext)
+    ) {
+      res.status(400).json({
+        error: `File type ${ext || 'unknown'} is not allowed. Allowed: ${store.backendConfig.allowedExtensions.join(', ')}`,
+      });
+      return;
+    }
+
+    const maxBytes = store.backendConfig.maxUploadSizeMb * 1024 * 1024;
+    if (fileSizeBytes > maxBytes) {
+      res.status(400).json({
+        error: `File exceeds maximum limit of ${store.backendConfig.maxUploadSizeMb} MB.`,
+      });
+      return;
+    }
+
+    const category: PrincipalDocumentCategory = VALID_PRINCIPAL_DOC_CATEGORIES.includes(
+      body.category as PrincipalDocumentCategory
+    )
+      ? (body.category as PrincipalDocumentCategory)
+      : 'School Memorandum';
+
+    const sizeLabel =
+      fileSizeBytes < 1024
+        ? `${Math.max(1, fileSizeBytes)} B`
+        : fileSizeBytes < 1024 * 1024
+        ? `${Math.round(fileSizeBytes / 1024)} KB`
+        : `${(fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+
+    const principalStaff = getPrincipalStaffRecord(store);
+    const principalDisplayName = principalStaff?.fullName ?? 'Ely M. Cadag';
+    const principalUsername =
+      principalSessions.get(token) ?? store.principalCredential?.username ?? 'e.cadag';
+    const principalAccountId = principalStaff?.id ?? 'staff-danlog-cadag';
+
+    const nowFormatted = new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+
+    const recipientAccountIds = collectAllPortalAccountIds(store);
+    const docId = `pdoc-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    const doc: PrincipalDocument = {
+      id: docId,
+      uploadedByAccountId: principalAccountId,
+      uploadedByName: principalDisplayName,
+      uploadedByUsername: principalUsername,
+      title,
+      category,
+      targetAudience: 'All Accounts (Teachers, Principal & AO-II)',
+      fileName,
+      fileSizeBytes,
+      fileSizeLabel: sizeLabel,
+      uploadedAt: nowFormatted,
+      notes: String(body.notes ?? '').trim() || 'Official document issued by the Office of the School Principal.',
+      documentContent: body.documentContent?.trim().slice(0, 100000) || undefined,
+      mimeType: getMimeTypeForFile(fileName, body.mimeType),
+      hasStoredFile: false,
+      notifiedAccountCount: recipientAccountIds.length,
+    };
+
+    const notification: AccountNotification = {
+      id: `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      type: 'principal_document',
+      title: `New Principal Document: ${doc.title}`,
+      message: `${principalDisplayName} (Principal) uploaded "${doc.title}" [${doc.category}] (${doc.fileName}).`,
+      documentId: doc.id,
+      documentTitle: doc.title,
+      documentCategory: doc.category,
+      fileName: doc.fileName,
+      senderRole: 'Principal',
+      senderName: principalDisplayName,
+      senderUsername: principalUsername,
+      recipientAccountIds,
+      recipientCount: recipientAccountIds.length,
+      readByAccountIds: [],
+      createdAt: nowFormatted,
+    };
+
+    if (!Array.isArray(store.principalDocuments)) {
+      store.principalDocuments = [];
+    }
+    if (!Array.isArray(store.accountNotifications)) {
+      store.accountNotifications = [];
+    }
+
+    store.principalDocuments.unshift(doc);
+    store.accountNotifications.unshift(notification);
+
+    appendAudit(
+      store,
+      'System',
+      `Principal ${principalDisplayName} uploaded "${doc.title}" (${doc.fileName}) and automatically sent notifications to all ${recipientAccountIds.length} portal accounts.`,
+      `${principalDisplayName} (Principal)`
+    );
+    saveStore(store);
+
+    res.status(201).json({
+      document: doc,
+      notification,
+      principalDocuments: store.principalDocuments,
+      accountNotifications: store.accountNotifications,
+      auditLog: store.auditLog,
+    });
+  });
+
+  app.put('/api/principal/documents/:docId/file', (req, res) => {
+    const principalToken = req.header('x-principal-token') ?? '';
+    const ao2Token = req.header('x-ao2-token') ?? '';
+    const isPrincipal =
+      req.header('x-principal-role') === 'PRINCIPAL' && principalSessions.has(principalToken);
+    const isAo2 = req.header('x-admin-role') === 'AO-II' && ao2Sessions.has(ao2Token);
+
+    const { docId } = req.params;
+    const doc = (store.principalDocuments ?? []).find((d) => d.id === docId);
+    if (!doc) {
+      res.status(404).json({ error: 'Principal document record not found.' });
+      return;
+    }
+    if (!isPrincipal && !isAo2) {
+      res.status(401).json({ error: 'Authentication required to attach file content.' });
+      return;
+    }
+    if (doc.hasStoredFile && !isAo2) {
+      res.status(403).json({
+        error:
+          'Document file is already saved in the database. Only an AO-II account can alter saved files.',
+      });
+      return;
+    }
+
+    if (!fs.existsSync(UPLOADS_DIR)) {
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    }
+    const safeName = sanitizeFileName(doc.fileName);
+    const filePath = path.join(UPLOADS_DIR, `${doc.id}_${safeName}`);
+    const maxBytes = store.backendConfig.maxUploadSizeMb * 1024 * 1024;
+    let receivedBytes = 0;
+    let aborted = false;
+
+    const writeStream = fs.createWriteStream(filePath);
+    req.on('data', (chunk: Buffer) => {
+      receivedBytes += chunk.length;
+      if (receivedBytes > maxBytes) {
+        aborted = true;
+        writeStream.destroy();
+        fs.rmSync(filePath, { force: true });
+        if (!res.headersSent) {
+          res.status(413).json({
+            error: `File exceeds maximum limit of ${store.backendConfig.maxUploadSizeMb} MB.`,
+          });
+        }
+        req.destroy();
+      }
+    });
+
+    req.pipe(writeStream);
+    writeStream.on('finish', () => {
+      if (aborted) return;
+      const incomingMime = getMimeTypeForFile(doc.fileName, req.header('content-type'));
+      let extractedText = doc.documentContent;
+      if (!extractedText && (incomingMime.startsWith('text/') || doc.fileName.endsWith('.csv'))) {
+        try {
+          extractedText = fs.readFileSync(filePath, 'utf-8').slice(0, 60000);
+        } catch {
+          // Ignore binary/decode edge cases
+        }
+      }
+      store.principalDocuments = (store.principalDocuments ?? []).map((item) =>
+        item.id === docId
+          ? {
+              ...item,
+              hasStoredFile: true,
+              mimeType: incomingMime,
+              documentContent: extractedText,
+            }
+          : item
+      );
+      saveStore(store);
+      res.json({ principalDocuments: store.principalDocuments });
+    });
+    writeStream.on('error', () => {
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Could not write uploaded file to server disk.' });
+      }
+    });
+  });
+
+  app.get('/api/principal-documents/:docId/file', (req, res) => {
+    const { docId } = req.params;
+    const doc = (store.principalDocuments ?? []).find((d) => d.id === docId);
+    if (!doc) {
+      res.status(404).json({ error: 'Principal document not found.' });
+      return;
+    }
+
+    const principalToken =
+      req.header('x-principal-token') ?? String(req.query.principalToken ?? '');
+    const teacherToken =
+      req.header('x-teacher-token') ?? String(req.query.teacherToken ?? '');
+    const ao2Token = req.header('x-ao2-token') ?? String(req.query.ao2Token ?? '');
+
+    const isAuthorized =
+      Boolean(principalToken && principalSessions.has(principalToken)) ||
+      Boolean(teacherToken && teacherSessions.has(teacherToken)) ||
+      Boolean(ao2Token && ao2Sessions.has(ao2Token));
+
+    if (!isAuthorized) {
+      res.status(401).json({
+        error: 'Authentication required: Sign in with a Teacher, Principal, or AO-II account to view.',
+      });
+      return;
+    }
+
+    const downloadMode = req.query.download === '1';
+    const disposition = downloadMode ? 'attachment' : 'inline';
+    const safeName = sanitizeFileName(doc.fileName);
+    const storedPath = path.join(UPLOADS_DIR, `${doc.id}_${safeName}`);
+
+    if (fs.existsSync(storedPath)) {
+      res.setHeader('Content-Type', getMimeTypeForFile(doc.fileName, doc.mimeType));
+      res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
+      fs.createReadStream(storedPath).pipe(res);
+      return;
+    }
+
+    const bodyText =
+      doc.documentContent ||
+      `${doc.notes}\n\nUploaded File: ${doc.fileName} (${doc.fileSizeLabel})\nCategory: ${doc.category}\nIssued By: ${doc.uploadedByName} (School Principal)`;
+
+    if (path.extname(doc.fileName).toLowerCase() === '.pdf') {
+      const pdfBuf = buildSimplePdfBuffer(
+        doc.title,
+        `${doc.category} | Issued by ${doc.uploadedByName} | ${doc.uploadedAt}`,
+        bodyText
+      );
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
+      res.send(pdfBuf);
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
+    res.send(bodyText);
+  });
+
+  app.delete('/api/principal/documents/:docId', requireAoII, (req, res) => {
+    const { docId } = req.params;
+    const targetDoc = (store.principalDocuments ?? []).find((d) => d.id === docId);
+    if (!targetDoc) {
+      res.status(404).json({ error: 'Principal document not found.' });
+      return;
+    }
+    const storedPath = path.join(
+      UPLOADS_DIR,
+      `${targetDoc.id}_${sanitizeFileName(targetDoc.fileName)}`
+    );
+    fs.rmSync(storedPath, { force: true });
+    store.principalDocuments = (store.principalDocuments ?? []).filter((d) => d.id !== docId);
+    store.accountNotifications = (store.accountNotifications ?? []).filter(
+      (n) => n.documentId !== docId
+    );
+    appendAudit(
+      store,
+      'Database',
+      `AO-II removed Principal document "${targetDoc.title}" (${docId}) and its linked notifications.`
+    );
+    saveStore(store);
+    res.json({
+      principalDocuments: store.principalDocuments,
+      accountNotifications: store.accountNotifications,
+      auditLog: store.auditLog,
+    });
+  });
+
+  app.post('/api/notifications/:id/read', (req, res) => {
+    const actor = resolveAnyStaffActor(req);
+    if (!actor) {
+      res.status(401).json({ error: 'Authentication required to acknowledge notifications.' });
+      return;
+    }
+    const { id } = req.params;
+    const target = (store.accountNotifications ?? []).find((n) => n.id === id);
+    if (!target) {
+      res.status(404).json({ error: 'Notification not found.' });
+      return;
+    }
+    store.accountNotifications = (store.accountNotifications ?? []).map((n) => {
+      if (n.id !== id) return n;
+      if (n.readByAccountIds.includes(actor.accountId)) return n;
+      return {
+        ...n,
+        readByAccountIds: [...n.readByAccountIds, actor.accountId],
+      };
+    });
+    saveStore(store);
+    res.json({ accountNotifications: store.accountNotifications });
+  });
+
+  app.post('/api/notifications/mark-all-read', (req, res) => {
+    const actor = resolveAnyStaffActor(req);
+    if (!actor) {
+      res.status(401).json({ error: 'Authentication required to mark notifications as read.' });
+      return;
+    }
+    store.accountNotifications = (store.accountNotifications ?? []).map((n) => {
+      if (
+        n.recipientAccountIds.includes(actor.accountId) &&
+        !n.readByAccountIds.includes(actor.accountId)
+      ) {
+        return {
+          ...n,
+          readByAccountIds: [...n.readByAccountIds, actor.accountId],
+        };
+      }
+      return n;
+    });
+    saveStore(store);
+    res.json({ accountNotifications: store.accountNotifications });
+  });
+
   app.post('/api/admissions', (req, res) => {
     if (!store.backendConfig.admissionsOpen) {
       res.status(403).json({
@@ -3343,28 +3804,13 @@ async function startServer() {
     res.json({ admissionsSubmissions: store.admissionsSubmissions, auditLog: store.auditLog });
   });
 
-  function resolveInventoryManagerActor(
-    req: express.Request
-  ): { role: 'AO-II' | 'Principal'; label: string } | null {
+  app.post('/api/admin/inventory', requireAoII, (req, res) => {
     const ao2Token = req.header('x-ao2-token') ?? '';
-    if (ao2Token && ao2Sessions.has(ao2Token)) {
-      return { role: 'AO-II', label: 'AO-II (Administrative Officer II)' };
-    }
-    const principalToken = req.header('x-principal-token') ?? '';
-    if (principalToken && principalSessions.has(principalToken)) {
-      return { role: 'Principal', label: 'Principal (School Head)' };
-    }
-    return null;
-  }
-
-  app.post('/api/admin/inventory', (req, res) => {
-    const manager = resolveInventoryManagerActor(req);
-    if (!manager) {
-      res.status(401).json({
-        error: 'Sign in with an AO-II or Principal account to add inventory items.',
-      });
-      return;
-    }
+    const ao2Info = ao2Sessions.get(ao2Token);
+    const ao2Staff = store.staffRecords.find((s) => s.id === ao2Info?.accountId);
+    const actorLabel = ao2Staff?.fullName
+      ? `${ao2Staff.fullName} (AO-II)`
+      : 'AO-II (Administrative Officer II)';
 
     const body = (req.body ?? {}) as Partial<InventoryItem>;
     const itemName = String(body.itemName ?? '').trim();
@@ -3419,7 +3865,7 @@ async function startServer() {
       store,
       'Inventory',
       `Added [${entry.category}] item "${entry.itemName}" (Qty: ${entry.quantity} ${entry.unit}, Status: ${entry.status}).`,
-      manager.label
+      actorLabel
     );
     saveStore(store);
     res.status(201).json({
@@ -3429,14 +3875,13 @@ async function startServer() {
     });
   });
 
-  app.patch('/api/admin/inventory/:id', (req, res) => {
-    const manager = resolveInventoryManagerActor(req);
-    if (!manager) {
-      res.status(401).json({
-        error: 'Sign in with an AO-II or Principal account to update inventory items.',
-      });
-      return;
-    }
+  app.patch('/api/admin/inventory/:id', requireAoII, (req, res) => {
+    const ao2Token = req.header('x-ao2-token') ?? '';
+    const ao2Info = ao2Sessions.get(ao2Token);
+    const ao2Staff = store.staffRecords.find((s) => s.id === ao2Info?.accountId);
+    const actorLabel = ao2Staff?.fullName
+      ? `${ao2Staff.fullName} (AO-II)`
+      : 'AO-II (Administrative Officer II)';
 
     const { id } = req.params;
     const existing = store.inventoryItems.find((item) => item.id === id);
@@ -3515,7 +3960,7 @@ async function startServer() {
       store,
       'Inventory',
       `Updated [${updated.category}] item "${updated.itemName}" (Qty: ${updated.quantity} ${updated.unit}, Status: ${updated.status}).`,
-      manager.label
+      actorLabel
     );
     saveStore(store);
     res.json({
@@ -3848,6 +4293,47 @@ async function startServer() {
     'Other',
   ];
 
+  const MAX_LEAVE_APPLICATIONS_PER_DATE = 4;
+
+  function findOverbookedLeaveDates(
+    applications: LeaveApplication[],
+    startDate: string,
+    endDate: string,
+    excludeId?: string
+  ): { date: string; count: number }[] {
+    const startMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate);
+    const endMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(endDate);
+    if (!startMatch || !endMatch) return [];
+    const startMs = Date.UTC(
+      Number(startMatch[1]),
+      Number(startMatch[2]) - 1,
+      Number(startMatch[3])
+    );
+    const endMs = Date.UTC(Number(endMatch[1]), Number(endMatch[2]) - 1, Number(endMatch[3]));
+    if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs) return [];
+
+    const overbooked: { date: string; count: number }[] = [];
+    const oneDayMs = 86400000;
+    let steps = 0;
+    for (let ms = startMs; ms <= endMs && steps < 366; ms += oneDayMs, steps++) {
+      const d = new Date(ms);
+      const iso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(
+        d.getUTCDate()
+      ).padStart(2, '0')}`;
+      const activeCount = applications.filter(
+        (app) =>
+          app.id !== excludeId &&
+          app.principalStatus !== 'Disapproved' &&
+          app.startDate <= iso &&
+          iso <= app.endDate
+      ).length;
+      if (activeCount >= MAX_LEAVE_APPLICATIONS_PER_DATE) {
+        overbooked.push({ date: iso, count: activeCount });
+      }
+    }
+    return overbooked;
+  }
+
   app.post('/api/leave-applications', (req, res) => {
     const actor = resolveAnyStaffActor(req);
     if (!actor) {
@@ -3882,6 +4368,16 @@ async function startServer() {
     }
     if (reason.length < 4) {
       res.status(400).json({ error: 'Provide a brief reason for your leave application.' });
+      return;
+    }
+
+    const conflicts = findOverbookedLeaveDates(store.leaveApplications ?? [], startDate, endDate);
+    if (conflicts.length > 0) {
+      res.status(409).json({
+        error: `Daily leave application limit reached (maximum ${MAX_LEAVE_APPLICATIONS_PER_DATE} applications on the same date): ${conflicts
+          .map((c) => `${c.date} (${c.count}/${MAX_LEAVE_APPLICATIONS_PER_DATE})`)
+          .join(', ')}. Please choose another date.`,
+      });
       return;
     }
 
@@ -4044,6 +4540,22 @@ async function startServer() {
       res.status(400).json({ error: 'Principal decision must be Approved or Disapproved.' });
       return;
     }
+    if (nextStatus === 'Approved') {
+      const conflicts = findOverbookedLeaveDates(
+        store.leaveApplications ?? [],
+        existing.startDate,
+        existing.endDate,
+        id
+      );
+      if (conflicts.length > 0) {
+        res.status(409).json({
+          error: `Cannot approve: daily leave limit (${MAX_LEAVE_APPLICATIONS_PER_DATE} applications per date) is already full on ${conflicts
+            .map((c) => `${c.date} (${c.count}/${MAX_LEAVE_APPLICATIONS_PER_DATE})`)
+            .join(', ')}.`,
+        });
+        return;
+      }
+    }
 
     const principalUsername =
       principalSessions.get(token) ?? store.principalCredential?.username ?? 'principal';
@@ -4114,6 +4626,23 @@ async function startServer() {
     if (reason.length < 4) {
       res.status(400).json({ error: 'Reason must be at least 4 characters.' });
       return;
+    }
+
+    if (existing.principalStatus !== 'Disapproved') {
+      const conflicts = findOverbookedLeaveDates(
+        store.leaveApplications ?? [],
+        startDate,
+        endDate,
+        id
+      );
+      if (conflicts.length > 0) {
+        res.status(409).json({
+          error: `Daily leave application limit reached (maximum ${MAX_LEAVE_APPLICATIONS_PER_DATE} applications on the same date): ${conflicts
+            .map((c) => `${c.date} (${c.count}/${MAX_LEAVE_APPLICATIONS_PER_DATE})`)
+            .join(', ')}. Choose another date.`,
+        });
+        return;
+      }
     }
 
     const ao2Token = req.header('x-ao2-token') ?? '';
@@ -4284,6 +4813,17 @@ async function startServer() {
       res.status(404).json({ error: 'Activity post not found.' });
       return;
     }
+    const alreadyHasUploadedImage = target.image.startsWith('/api/activities/');
+    if (
+      actor.role !== 'AO-II' &&
+      (alreadyHasUploadedImage ||
+        (target.authorAccountId && target.authorAccountId !== actor.accountId))
+    ) {
+      res.status(403).json({
+        error: 'Only an AO-II account can alter an already-saved activity post image.',
+      });
+      return;
+    }
 
     const rawFileName = decodeURIComponent(req.header('x-file-name') ?? 'activity_photo.jpg');
     const ext = path.extname(rawFileName).toLowerCase() || '.jpg';
@@ -4376,6 +4916,351 @@ async function startServer() {
     res.json({ activityPosts: store.activityPosts, auditLog: store.auditLog });
   });
 
+  function resolveCalendarManagerActor(req: express.Request): {
+    role: 'AO-II' | 'Principal';
+    name: string;
+    username: string;
+  } | null {
+    const ao2Token = req.header('x-ao2-token') ?? '';
+    if (req.header('x-admin-role') === 'AO-II' && ao2Sessions.has(ao2Token)) {
+      const info = ao2Sessions.get(ao2Token)!;
+      const staff = store.staffRecords.find((s) => s.id === info.accountId);
+      return {
+        role: 'AO-II',
+        name: staff?.fullName ?? info.username ?? 'AO-II Administrator',
+        username: info.username,
+      };
+    }
+    const principalToken = req.header('x-principal-token') ?? '';
+    if (req.header('x-principal-role') === 'PRINCIPAL' && principalSessions.has(principalToken)) {
+      const pStaff = getPrincipalStaffRecord(store);
+      return {
+        role: 'Principal',
+        name: pStaff?.fullName ?? 'Ely M. Cadag',
+        username: principalSessions.get(principalToken) ?? 'e.cadag',
+      };
+    }
+    return null;
+  }
+
+  function parseCalendarDateFields(eventDateRaw: string): {
+    eventDate: string;
+    monthGroup: string;
+    monthShort: string;
+    dayNumber: string;
+    dayOfWeek: string;
+  } | null {
+    const trimmed = eventDateRaw.trim();
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const monthIdx = Number(match[2]) - 1;
+    const day = Number(match[3]);
+    const dt = new Date(Date.UTC(year, monthIdx, day));
+    if (
+      Number.isNaN(dt.getTime()) ||
+      dt.getUTCFullYear() !== year ||
+      dt.getUTCMonth() !== monthIdx ||
+      dt.getUTCDate() !== day
+    ) {
+      return null;
+    }
+    const monthNames = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    const monthShorts = [
+      'JAN',
+      'FEB',
+      'MAR',
+      'APR',
+      'MAY',
+      'JUN',
+      'JUL',
+      'AUG',
+      'SEP',
+      'OCT',
+      'NOV',
+      'DEC',
+    ];
+    const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return {
+      eventDate: trimmed,
+      monthGroup: `${monthNames[monthIdx]} ${year}`,
+      monthShort: monthShorts[monthIdx],
+      dayNumber: String(day).padStart(2, '0'),
+      dayOfWeek: weekDays[dt.getUTCDay()],
+    };
+  }
+
+  function sortCalendarActivities(items: CalendarActivityItem[]): CalendarActivityItem[] {
+    const toTs = (item: CalendarActivityItem) => {
+      if (item.eventDate && /^\d{4}-\d{2}-\d{2}$/.test(item.eventDate)) {
+        return new Date(`${item.eventDate}T00:00:00Z`).getTime();
+      }
+      const parsed = new Date(`${item.monthGroup.replace(' ', ` ${Number(item.dayNumber)}, `)}`);
+      return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+    };
+    return [...items].sort((a, b) => toTs(a) - toTs(b));
+  }
+
+  app.post('/api/calendar-activities', (req, res) => {
+    const actor = resolveCalendarManagerActor(req);
+    if (!actor) {
+      res.status(401).json({
+        error:
+          'Authentication required: Sign in with an AO-II or Principal account to add calendar activities.',
+      });
+      return;
+    }
+
+    const body = (req.body ?? {}) as {
+      eventDate?: string;
+      title?: string;
+      divisionScope?: CalendarActivityItem['divisionScope'];
+      category?: CalendarActivityItem['category'];
+      timeRange?: string;
+      venue?: string;
+      details?: string;
+    };
+
+    const parsedDate = parseCalendarDateFields(String(body.eventDate ?? ''));
+    if (!parsedDate) {
+      res.status(400).json({ error: 'Please provide a valid activity date (YYYY-MM-DD).' });
+      return;
+    }
+
+    const title = String(body.title ?? '').trim();
+    if (title.length < 3) {
+      res.status(400).json({ error: 'Activity title must be at least 3 characters.' });
+      return;
+    }
+
+    const validScopes: CalendarActivityItem['divisionScope'][] = [
+      'All-School (K–6)',
+      'Primary (K–3)',
+      'Intermediate (4–6)',
+    ];
+    const divisionScope = validScopes.includes(body.divisionScope as CalendarActivityItem['divisionScope'])
+      ? (body.divisionScope as CalendarActivityItem['divisionScope'])
+      : 'All-School (K–6)';
+
+    const validCategories: CalendarActivityItem['category'][] = [
+      'Academic',
+      'Arts & Culture',
+      'Athletics',
+      'Community & PTA',
+    ];
+    const category = validCategories.includes(body.category as CalendarActivityItem['category'])
+      ? (body.category as CalendarActivityItem['category'])
+      : 'Academic';
+
+    const timeRange = String(body.timeRange ?? '').trim() || '8:00 a.m. – 12:00 p.m.';
+    const venue = String(body.venue ?? '').trim() || 'Danlog Elementary School Grounds';
+    const details =
+      String(body.details ?? '').trim() || `${title} scheduled at ${venue}.`;
+
+    const nowFormatted = new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+
+    const item: CalendarActivityItem = {
+      id: `cal-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      ...parsedDate,
+      title,
+      divisionScope,
+      category,
+      timeRange,
+      venue,
+      details,
+      updatedAt: nowFormatted,
+      updatedBy: `${actor.name} (${actor.role})`,
+    };
+
+    if (!Array.isArray(store.calendarActivities)) {
+      store.calendarActivities = [];
+    }
+    store.calendarActivities = sortCalendarActivities([...store.calendarActivities, item]);
+    appendAudit(
+      store,
+      'System',
+      `${actor.name} (${actor.role}) added calendar activity "${item.title}" (${item.monthGroup} ${item.dayNumber}).`,
+      `${actor.name} (${actor.role})`
+    );
+    saveStore(store);
+
+    res.status(201).json({
+      activity: item,
+      calendarActivities: store.calendarActivities,
+      auditLog: store.auditLog,
+    });
+  });
+
+  app.patch('/api/calendar-activities/:id', (req, res) => {
+    const actor = resolveCalendarManagerActor(req);
+    if (!actor) {
+      res.status(401).json({
+        error:
+          'Authentication required: Sign in with an AO-II or Principal account to update calendar activities.',
+      });
+      return;
+    }
+
+    const { id } = req.params;
+    const existing = (store.calendarActivities ?? []).find((ev) => ev.id === id);
+    if (!existing) {
+      res.status(404).json({ error: 'Calendar activity not found.' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as {
+      eventDate?: string;
+      title?: string;
+      divisionScope?: CalendarActivityItem['divisionScope'];
+      category?: CalendarActivityItem['category'];
+      timeRange?: string;
+      venue?: string;
+      details?: string;
+    };
+
+    let dateFields = {
+      eventDate: existing.eventDate,
+      monthGroup: existing.monthGroup,
+      monthShort: existing.monthShort,
+      dayNumber: existing.dayNumber,
+      dayOfWeek: existing.dayOfWeek,
+    };
+
+    if (body.eventDate !== undefined) {
+      const parsedDate = parseCalendarDateFields(String(body.eventDate));
+      if (!parsedDate) {
+        res.status(400).json({ error: 'Please provide a valid activity date (YYYY-MM-DD).' });
+        return;
+      }
+      dateFields = parsedDate;
+    }
+
+    const title = body.title !== undefined ? String(body.title).trim() : existing.title;
+    if (title.length < 3) {
+      res.status(400).json({ error: 'Activity title must be at least 3 characters.' });
+      return;
+    }
+
+    const validScopes: CalendarActivityItem['divisionScope'][] = [
+      'All-School (K–6)',
+      'Primary (K–3)',
+      'Intermediate (4–6)',
+    ];
+    const divisionScope = validScopes.includes(body.divisionScope as CalendarActivityItem['divisionScope'])
+      ? (body.divisionScope as CalendarActivityItem['divisionScope'])
+      : existing.divisionScope;
+
+    const validCategories: CalendarActivityItem['category'][] = [
+      'Academic',
+      'Arts & Culture',
+      'Athletics',
+      'Community & PTA',
+    ];
+    const category = validCategories.includes(body.category as CalendarActivityItem['category'])
+      ? (body.category as CalendarActivityItem['category'])
+      : existing.category;
+
+    const timeRange =
+      body.timeRange !== undefined
+        ? String(body.timeRange).trim() || existing.timeRange
+        : existing.timeRange;
+    const venue =
+      body.venue !== undefined ? String(body.venue).trim() || existing.venue : existing.venue;
+    const details =
+      body.details !== undefined
+        ? String(body.details).trim() || existing.details
+        : existing.details;
+
+    const nowFormatted = new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+
+    const updatedItem: CalendarActivityItem = {
+      ...existing,
+      ...dateFields,
+      title,
+      divisionScope,
+      category,
+      timeRange,
+      venue,
+      details,
+      updatedAt: nowFormatted,
+      updatedBy: `${actor.name} (${actor.role})`,
+    };
+
+    store.calendarActivities = sortCalendarActivities(
+      (store.calendarActivities ?? []).map((ev) => (ev.id === id ? updatedItem : ev))
+    );
+    appendAudit(
+      store,
+      'System',
+      `${actor.name} (${actor.role}) updated calendar activity "${updatedItem.title}" (${updatedItem.monthGroup} ${updatedItem.dayNumber}).`,
+      `${actor.name} (${actor.role})`
+    );
+    saveStore(store);
+
+    res.json({
+      activity: updatedItem,
+      calendarActivities: store.calendarActivities,
+      auditLog: store.auditLog,
+    });
+  });
+
+  app.delete('/api/calendar-activities/:id', (req, res) => {
+    const actor = resolveCalendarManagerActor(req);
+    if (!actor) {
+      res.status(401).json({
+        error:
+          'Authentication required: Sign in with an AO-II or Principal account to delete calendar activities.',
+      });
+      return;
+    }
+
+    const { id } = req.params;
+    const target = (store.calendarActivities ?? []).find((ev) => ev.id === id);
+    if (!target) {
+      res.status(404).json({ error: 'Calendar activity not found.' });
+      return;
+    }
+
+    store.calendarActivities = (store.calendarActivities ?? []).filter((ev) => ev.id !== id);
+    appendAudit(
+      store,
+      'System',
+      `${actor.name} (${actor.role}) removed calendar activity "${target.title}" (${target.monthGroup} ${target.dayNumber}).`,
+      `${actor.name} (${actor.role})`
+    );
+    saveStore(store);
+
+    res.json({
+      calendarActivities: store.calendarActivities,
+      auditLog: store.auditLog,
+    });
+  });
+
   app.post('/api/home-posts', (req, res) => {
     const actor = resolveAnyStaffActor(req);
     if (!actor) {
@@ -4452,6 +5337,16 @@ async function startServer() {
     const target = store.homePosts.find((p) => p.id === postId);
     if (!target) {
       res.status(404).json({ error: 'Home post not found.' });
+      return;
+    }
+    if (
+      actor.role !== 'AO-II' &&
+      (Boolean(target.imageUrl) ||
+        (target.authorAccountId && target.authorAccountId !== actor.accountId))
+    ) {
+      res.status(403).json({
+        error: 'Only an AO-II account can alter an already-saved home post image.',
+      });
       return;
     }
 
@@ -5008,8 +5903,7 @@ async function startServer() {
       g6: 'Grade 6',
     };
     const gradeLabel = String(body.gradeLabel ?? '').trim() || gradeMap[gradeId] || 'Kindergarten';
-    const academicYear: AcademicYear =
-      body.academicYear === '2025-2026' ? '2025-2026' : '2026-2027';
+    const academicYear: AcademicYear = '2026-2027';
     const enrollmentStatus: StudentEnrollmentStatus =
       body.enrollmentStatus === 'Enrolled' ||
       body.enrollmentStatus === 'Transferred In' ||
@@ -5114,7 +6008,7 @@ async function startServer() {
         body.adviserName !== undefined
           ? String(body.adviserName).trim() || existing.adviserName
           : existing.adviserName,
-      academicYear: body.academicYear === '2025-2026' ? '2025-2026' : body.academicYear === '2026-2027' ? '2026-2027' : existing.academicYear,
+      academicYear: body.academicYear === '2026-2027' ? '2026-2027' : existing.academicYear,
       enrollmentStatus: body.enrollmentStatus ?? existing.enrollmentStatus,
       attendance: body.attendance ?? existing.attendance,
       currentAverage:
@@ -5342,6 +6236,13 @@ async function startServer() {
     const existingIdx = store.studentDocFeedback.findIndex(
       (f) => f.docId === cleanDocId && f.teacherId === targetTeacherId
     );
+    if (existingIdx >= 0 && !isAo2) {
+      res.status(403).json({
+        error:
+          'Feedback for this student submission is already saved in the database. Only an AO-II account can alter saved entries.',
+      });
+      return;
+    }
     let savedEntry: StudentDocFeedbackEntry;
     if (existingIdx >= 0) {
       savedEntry = {
@@ -5404,9 +6305,7 @@ async function startServer() {
     }
 
     const bootstrap = toBootstrapPayload(store);
-    const enrollmentRows =
-      (bootstrap.enrollmentByYear['2026-2027']?.length ?? 0) +
-      (bootstrap.enrollmentByYear['2025-2026']?.length ?? 0);
+    const enrollmentRows = bootstrap.enrollmentByYear['2026-2027']?.length ?? 0;
 
     return {
       engine: 'Express JSON Persistent Store',
@@ -5419,11 +6318,14 @@ async function startServer() {
         materialRequisitions: bootstrap.materialRequisitions.length,
         leaveApplications: bootstrap.leaveApplications?.length ?? 0,
         uploadedDocuments: bootstrap.uploadedDocuments.length,
+        principalDocuments: bootstrap.principalDocuments?.length ?? 0,
+        accountNotifications: bootstrap.accountNotifications?.length ?? 0,
         admissionsSubmissions: bootstrap.admissionsSubmissions.length,
         staffRecords: bootstrap.staffRecords.length,
         studentRecords: bootstrap.studentRecords.length,
         activityPosts: bootstrap.activityPosts.length,
         homePosts: bootstrap.homePosts.length,
+        calendarActivities: bootstrap.calendarActivities?.length ?? 0,
         teacherNotes: bootstrap.teacherNotes?.length ?? 0,
         studentDocFeedback: bootstrap.studentDocFeedback?.length ?? 0,
         staffAccounts:
@@ -5563,6 +6465,38 @@ async function startServer() {
         'Database',
         `Deleted uploaded document "${target.title}" (${id}) from database.`
       );
+    } else if (collection === 'principalDocuments') {
+      const target = (store.principalDocuments ?? []).find((doc) => doc.id === id);
+      if (!target) {
+        res.status(404).json({ error: 'Principal document record not found.' });
+        return;
+      }
+      const storedPath = path.join(
+        UPLOADS_DIR,
+        `${target.id}_${sanitizeFileName(target.fileName)}`
+      );
+      fs.rmSync(storedPath, { force: true });
+      store.principalDocuments = (store.principalDocuments ?? []).filter((doc) => doc.id !== id);
+      store.accountNotifications = (store.accountNotifications ?? []).filter(
+        (n) => n.documentId !== id
+      );
+      appendAudit(
+        store,
+        'Database',
+        `Deleted Principal document "${target.title}" (${id}) from database.`
+      );
+    } else if (collection === 'accountNotifications') {
+      const target = (store.accountNotifications ?? []).find((n) => n.id === id);
+      if (!target) {
+        res.status(404).json({ error: 'Notification record not found.' });
+        return;
+      }
+      store.accountNotifications = (store.accountNotifications ?? []).filter((n) => n.id !== id);
+      appendAudit(
+        store,
+        'Database',
+        `Deleted notification "${target.title}" (${id}) from database.`
+      );
     } else if (collection === 'admissionsSubmissions') {
       const target = store.admissionsSubmissions.find((item) => item.id === id);
       if (!target) {
@@ -5696,6 +6630,18 @@ async function startServer() {
       }
       store.homePosts = store.homePosts.filter((item) => item.id !== id);
       appendAudit(store, 'Database', `Deleted home page post "${target.title}" (${id}) from database.`);
+    } else if (collection === 'calendarActivities') {
+      const target = (store.calendarActivities ?? []).find((item) => item.id === id);
+      if (!target) {
+        res.status(404).json({ error: 'Calendar activity not found.' });
+        return;
+      }
+      store.calendarActivities = (store.calendarActivities ?? []).filter((item) => item.id !== id);
+      appendAudit(
+        store,
+        'Database',
+        `Deleted calendar activity "${target.title}" (${id}) from database.`
+      );
     } else if (collection === 'teacherNotes') {
       const target = (store.teacherNotes ?? []).find((item) => item.id === id);
       if (!target) {
@@ -5759,10 +6705,11 @@ async function startServer() {
 
     if (
       incoming.enrollmentByYear &&
-      Array.isArray(incoming.enrollmentByYear['2026-2027']) &&
-      Array.isArray(incoming.enrollmentByYear['2025-2026'])
+      Array.isArray(incoming.enrollmentByYear['2026-2027'])
     ) {
-      store.enrollmentByYear = incoming.enrollmentByYear;
+      store.enrollmentByYear = {
+        '2026-2027': incoming.enrollmentByYear['2026-2027'],
+      };
       updatedSections.push('enrollmentByYear');
     }
 
@@ -5784,6 +6731,16 @@ async function startServer() {
     if (Array.isArray(incoming.uploadedDocuments)) {
       store.uploadedDocuments = incoming.uploadedDocuments;
       updatedSections.push('uploadedDocuments');
+    }
+
+    if (Array.isArray(incoming.principalDocuments)) {
+      store.principalDocuments = incoming.principalDocuments;
+      updatedSections.push('principalDocuments');
+    }
+
+    if (Array.isArray(incoming.accountNotifications)) {
+      store.accountNotifications = incoming.accountNotifications;
+      updatedSections.push('accountNotifications');
     }
 
     if (Array.isArray(incoming.admissionsSubmissions)) {
@@ -5870,6 +6827,11 @@ async function startServer() {
     if (Array.isArray(incoming.homePosts)) {
       store.homePosts = incoming.homePosts;
       updatedSections.push('homePosts');
+    }
+
+    if (Array.isArray(incoming.calendarActivities)) {
+      store.calendarActivities = incoming.calendarActivities;
+      updatedSections.push('calendarActivities');
     }
 
     if (Array.isArray(incoming.teacherNotes)) {
