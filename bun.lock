@@ -1,3 +1,0 @@
-git add bun.lock
-git commit -m "chore: regenerate bun.lock"
-git push
